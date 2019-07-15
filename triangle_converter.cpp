@@ -101,11 +101,11 @@ void setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input)
 	// Compute interpolation derivatives.
 	float ab_x = input.vertices[1].x - input.vertices[0].x;
 	float ab_y = input.vertices[1].y - input.vertices[0].y;
-	float ac_x = input.vertices[2].x - input.vertices[0].x;
-	float ac_y = input.vertices[2].y - input.vertices[0].y;
 	float bc_x = input.vertices[2].x - input.vertices[1].x;
 	float bc_y = input.vertices[2].y - input.vertices[1].y;
-	float signed_area = ab_x * ac_y - ab_y * ac_x;
+	float ca_x = input.vertices[0].x - input.vertices[1].x;
+	float ca_y = input.vertices[0].y - input.vertices[1].y;
+	float signed_area = bc_x * ab_y - bc_y * ab_x;
 
 	// Check if triangle is degenerate. Compute derivatives.
 	if (std::fabs(signed_area) != 0.0f)
@@ -116,13 +116,13 @@ void setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input)
 
 		for (int c = 0; c < 4; c++)
 		{
-			dcolor_dx[c] = (-ab_y * input.vertices[2].color[c]) +
-			               (ac_y * input.vertices[1].color[c]) +
-			               (-bc_y * input.vertices[0].color[c]);
+			dcolor_dx[c] = -(ab_y * input.vertices[2].color[c] +
+			                 ca_y * input.vertices[1].color[c] +
+			                 bc_y * input.vertices[0].color[c]);
 
-			dcolor_dy[c] = (ab_x * input.vertices[2].color[c]) +
-			               (-ac_x * input.vertices[1].color[c]) +
-			               (bc_x * input.vertices[0].color[c]);
+			dcolor_dy[c] = ab_x * input.vertices[2].color[c] +
+			               ca_x * input.vertices[1].color[c] +
+			               bc_x * input.vertices[0].color[c];
 
 			dcolor_dx[c] *= inv_signed_area;
 			dcolor_dy[c] *= inv_signed_area;
