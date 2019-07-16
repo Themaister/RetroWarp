@@ -36,6 +36,11 @@ public:
 		return height;
 	}
 
+	const T *get_data() const
+	{
+		return data.data();
+	}
+
 private:
 	std::vector<T> data;
 	unsigned width = 0;

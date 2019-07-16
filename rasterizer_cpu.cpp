@@ -1,4 +1,5 @@
 #include "rasterizer_cpu.hpp"
+#include "stb_image_write.h"
 
 namespace RetroWarp
 {
@@ -63,9 +64,9 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 	{
 		// Need to interpolate at high resolution,
 		// since dxdy requires a very good resolution to resolve near vertical lines.
-		int x_a = prim.x_a + prim.dxdy_a * (y - interpolation_base_ylo);
-		int x_b = prim.x_b + prim.dxdy_b * (y - interpolation_base_ylo);
-		int x_c = prim.x_c + prim.dxdy_c * (y - interpolation_base_ymid);
+		int x_a = prim.x_a + prim.dxdy_a * ((y - interpolation_base_ylo) << 2);
+		int x_b = prim.x_b + prim.dxdy_b * ((y - interpolation_base_ylo) << 2);
+		int x_c = prim.x_c + prim.dxdy_c * ((y - interpolation_base_ymid) << 2);
 
 		// The secondary span edge is split into two edges.
 		bool select_hi = (y << 2) >= prim.y_mid;
@@ -105,17 +106,98 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 			b = clamp_unorm8((b + 64) >> 8);
 			a = clamp_unorm8((a + 64) >> 8);
 
-			#if 0
 			int z = prim.z + prim.dzdx * dx + prim.dzdy * dy;
 			int w = prim.w + prim.dwdx * dx + prim.dwdy * dy;
+			int u = prim.u + prim.dudx * dx + prim.dudy * dy;
+			int v = prim.v + prim.dvdx * dx + prim.dvdy * dy;
 
-			int16_t u = prim.uv.u + prim.duv_dx.u * dx + prim.duv_dy.u * dy;
-			int16_t v = prim.uv.v + prim.duv_dx.v * dx + prim.duv_dy.v * dy;
-			#endif
+			w = std::max(1, w);
+			u = (u << 13) / w;
+			v = (v << 13) / w;
 
-			uint32_t argb = (uint32_t(a) << 24) | (uint32_t(b) << 16) | (uint32_t(g) << 8) | (uint32_t(r) << 0);
+			int sub_u = u & 31;
+			int sub_v = v & 31;
+			u >>= 5;
+			v >>= 5;
+
+			auto tex_00 = sampler->sample(u, v);
+			auto tex_10 = sampler->sample(u + 1, v);
+			auto tex_01 = sampler->sample(u, v + 1);
+			auto tex_11 = sampler->sample(u + 1, v + 1);
+
+			auto tex_0 = filter_linear_horiz(tex_00, tex_10, sub_u);
+			auto tex_1 = filter_linear_horiz(tex_01, tex_11, sub_u);
+			auto tex = filter_linear_vert(tex_0, tex_1, sub_v);
+
+			tex = multiply_unorm8(tex, { uint8_t(r), uint8_t(g), uint8_t(b), uint8_t(a) });
+
+			uint32_t argb = (uint32_t(tex.a) << 24) | (uint32_t(tex.b) << 16) | (uint32_t(tex.g) << 8) | (uint32_t(tex.r) << 0);
 			canvas.get(x, y) = argb;
 		}
 	}
+}
+
+RasterizerCPU::FilteredTexel RasterizerCPU::filter_linear_horiz(const Texel &left, const Texel &right, int weight)
+{
+	int l = 32 - weight;
+	int r = weight;
+	return {
+		uint16_t(left.r * l + right.r * r),
+		uint16_t(left.g * l + right.g * r),
+		uint16_t(left.b * l + right.b * r),
+		uint16_t(left.a * l + right.a * r),
+	};
+}
+
+Texel RasterizerCPU::filter_linear_vert(const RasterizerCPU::FilteredTexel &top,
+                                        const RasterizerCPU::FilteredTexel &bottom, int weight)
+{
+	int t = 32 - weight;
+	int b = weight;
+	return {
+		uint8_t((top.r * t + bottom.r * b + 512) >> 10),
+		uint8_t((top.g * t + bottom.g * b + 512) >> 10),
+		uint8_t((top.b * t + bottom.b * b + 512) >> 10),
+		uint8_t((top.a * t + bottom.a * b + 512) >> 10),
+	};
+}
+
+static uint8_t multiply_unorm8_component(uint8_t a, uint8_t b)
+{
+	int v = a * b;
+	v += (v >> 8);
+	return uint8_t((v + 0x80) >> 8);
+}
+
+Texel RasterizerCPU::multiply_unorm8(const Texel &left, const Texel &right)
+{
+	return {
+		multiply_unorm8_component(left.r, right.r),
+		multiply_unorm8_component(left.g, right.g),
+		multiply_unorm8_component(left.b, right.b),
+		multiply_unorm8_component(left.a, right.a),
+	};
+}
+
+void RasterizerCPU::fill_alpha_opaque()
+{
+	for (unsigned y = 0; y < canvas.get_height(); y++)
+	{
+		for (unsigned x = 0; x < canvas.get_width(); x++)
+		{
+			canvas.get(x, y) |= 0xff000000u;
+		}
+	}
+}
+
+void RasterizerCPU::set_sampler(Sampler *sampler_)
+{
+	sampler = sampler_;
+}
+
+bool RasterizerCPU::save_canvas(const char *path) const
+{
+	const void *data = canvas.get_data();
+	return stbi_write_png(path, canvas.get_width(), canvas.get_height(), 4, data, canvas.get_width() * 4);
 }
 }

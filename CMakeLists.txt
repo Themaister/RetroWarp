@@ -23,6 +23,8 @@ if (${CMAKE_VERSION} VERSION_GREATER "3.13.0")
    cmake_policy(SET CMP0077 NEW)
 endif()
 
+add_subdirectory(stb EXCLUDE_FROM_ALL)
+
 #function(add_static_library NAME)
 #    add_library(${NAME} STATIC ${ARGN})
 #    if (${GRANITE_PLATFORM} MATCHES "libretro")
@@ -48,6 +50,7 @@ add_library(rasterizer STATIC
         rasterizer_cpu.hpp rasterizer_cpu.cpp)
 target_compile_options(rasterizer PRIVATE ${RETROWARP_CXX_FLAGS})
 target_include_directories(rasterizer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(rasterizer PRIVATE stb)
 
 add_executable(test test.cpp)
 target_compile_options(test PRIVATE ${RETROWARP_CXX_FLAGS})

@@ -10,7 +10,8 @@ struct Vertex
 	float y;
 	float z;
 	float w;
-	float uv[2];
+	float u;
+	float v;
 	float color[4];
 };
 
