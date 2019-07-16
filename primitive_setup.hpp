@@ -23,7 +23,7 @@ struct PrimitiveSetup
 	int32_t w, dwdx, dwdy;
 	int32_t z, dzdx, dzdy;
 
-	uint16_t color[4];
+	int16_t color[4];
 	int16_t dcolor_dx[4];
 	int16_t dcolor_dy[4];
 

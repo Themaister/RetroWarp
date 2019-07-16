@@ -27,15 +27,6 @@ static uint16_t clamp_float_uint16(float v)
 		return uint16_t(v);
 }
 
-static void quantize_color(uint16_t output[4], const float input[4])
-{
-	for (int i = 0; i < 4; i++)
-	{
-		float rounded = std::round(input[i] * 255.0f * 256.0f);
-		output[i] = clamp_float_uint16(rounded);
-	}
-}
-
 static int16_t clamp_float_int16(float v)
 {
 	if (v < float(-0x8000))
@@ -50,7 +41,7 @@ static void quantize_color(int16_t output[4], const float input[4])
 {
 	for (int i = 0; i < 4; i++)
 	{
-		float rounded = std::round(input[i] * 255.0f * 128.0f);
+		float rounded = std::round(input[i] * 255.0f * 64.0f);
 		output[i] = clamp_float_int16(rounded);
 	}
 }
@@ -118,6 +109,7 @@ void setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input)
 	quantize_color(setup.color, input.vertices[index_a].color);
 
 	// Compute interpolation derivatives.
+	// FIXME: Compute this post vertex snapping!
 	float ab_x = input.vertices[1].x - input.vertices[0].x;
 	float ab_y = input.vertices[1].y - input.vertices[0].y;
 	float bc_x = input.vertices[2].x - input.vertices[1].x;
@@ -210,9 +202,9 @@ void setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input)
 	for (int c = 0; c < 4; c++)
 		setup.color[c] -= (setup.dcolor_dx[c] >> 3) * x_subpel_offset + (setup.dcolor_dy[c] >> 2) * y_subpel_offset_lo;
 
-	setup.z += (setup.dzdx >> 3) * x_subpel_offset + (setup.dzdy >> 2) * y_subpel_offset_lo;
-	setup.w += (setup.dwdx >> 3) * x_subpel_offset + (setup.dwdy >> 2) * y_subpel_offset_lo;
-	setup.u += (setup.dudx >> 3) * x_subpel_offset + (setup.dudy >> 2) * y_subpel_offset_lo;
-	setup.v += (setup.dvdx >> 3) * x_subpel_offset + (setup.dvdy >> 2) * y_subpel_offset_lo;
+	setup.z -= (setup.dzdx >> 3) * x_subpel_offset + (setup.dzdy >> 2) * y_subpel_offset_lo;
+	setup.w -= (setup.dwdx >> 3) * x_subpel_offset + (setup.dwdy >> 2) * y_subpel_offset_lo;
+	setup.u -= (setup.dudx >> 3) * x_subpel_offset + (setup.dudy >> 2) * y_subpel_offset_lo;
+	setup.v -= (setup.dvdx >> 3) * x_subpel_offset + (setup.dvdy >> 2) * y_subpel_offset_lo;
 }
 }

@@ -1,5 +1,6 @@
 #include "rasterizer_cpu.hpp"
 #include "stb_image_write.h"
+#include <assert.h>
 
 namespace RetroWarp
 {
@@ -96,15 +97,15 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 		{
 			int dx = x - interpolation_base_x;
 
-			int r = int(prim.color[0]) + (int(prim.dcolor_dx[0]) << 1) * dx + (int(prim.dcolor_dy[0]) << 1) * dy;
-			int g = int(prim.color[1]) + (int(prim.dcolor_dx[1]) << 1) * dx + (int(prim.dcolor_dy[1]) << 1) * dy;
-			int b = int(prim.color[2]) + (int(prim.dcolor_dx[2]) << 1) * dx + (int(prim.dcolor_dy[2]) << 1) * dy;
-			int a = int(prim.color[3]) + (int(prim.dcolor_dx[3]) << 1) * dx + (int(prim.dcolor_dy[3]) << 1) * dy;
+			int r = int(prim.color[0]) + int(prim.dcolor_dx[0]) * dx + int(prim.dcolor_dy[0]) * dy;
+			int g = int(prim.color[1]) + int(prim.dcolor_dx[1]) * dx + int(prim.dcolor_dy[1]) * dy;
+			int b = int(prim.color[2]) + int(prim.dcolor_dx[2]) * dx + int(prim.dcolor_dy[2]) * dy;
+			int a = int(prim.color[3]) + int(prim.dcolor_dx[3]) * dx + int(prim.dcolor_dy[3]) * dy;
 
-			r = clamp_unorm8((r + 64) >> 8);
-			g = clamp_unorm8((g + 64) >> 8);
-			b = clamp_unorm8((b + 64) >> 8);
-			a = clamp_unorm8((a + 64) >> 8);
+			r = clamp_unorm8((r + 32) >> 6);
+			g = clamp_unorm8((g + 32) >> 6);
+			b = clamp_unorm8((b + 32) >> 6);
+			a = clamp_unorm8((a + 32) >> 6);
 
 			int z = prim.z + prim.dzdx * dx + prim.dzdy * dy;
 			int w = prim.w + prim.dwdx * dx + prim.dwdy * dy;
@@ -166,7 +167,9 @@ static uint8_t multiply_unorm8_component(uint8_t a, uint8_t b)
 {
 	int v = a * b;
 	v += (v >> 8);
-	return uint8_t((v + 0x80) >> 8);
+	v = (v + 0x80) >> 8;
+	assert(v <= 255 && v >= 0);
+	return uint8_t(v);
 }
 
 Texel RasterizerCPU::multiply_unorm8(const Texel &left, const Texel &right)

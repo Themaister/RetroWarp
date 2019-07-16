@@ -25,12 +25,12 @@ int main()
 
 	PrimitiveSetup setup;
 	InputPrimitive prim = {};
-	prim.vertices[0].x = 200.0f;
-	prim.vertices[0].y = 100.0f;
-	prim.vertices[1].x = 104.0f;
-	prim.vertices[1].y = 100.0f;
-	prim.vertices[2].x = 104.0f;
-	prim.vertices[2].y = 201.0f;
+	prim.vertices[0].x = 200.3f;
+	prim.vertices[0].y = 100.4f;
+	prim.vertices[1].x = 104.5f;
+	prim.vertices[1].y = 100.6f;
+	prim.vertices[2].x = 104.7f;
+	prim.vertices[2].y = 201.8f;
 
 	prim.vertices[0].z = 1.0f;
 	prim.vertices[0].w = 1.0f;
