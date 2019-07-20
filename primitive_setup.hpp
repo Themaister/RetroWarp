@@ -16,9 +16,12 @@ using PrimitiveFlags = uint16_t;
 struct PrimitiveSetup
 {
 	int32_t x_a, x_b, x_c;
-	int32_t dxdy_a, dxdy_b, dxdy_c;
 	int16_t y_lo, y_mid, y_hi;
-	uint16_t flags;
+
+	int16_t u, dudx, dudy;
+	int16_t v, dvdx, dvdy;
+
+	int32_t dxdy_a, dxdy_b, dxdy_c;
 
 	int32_t w, dwdx, dwdy;
 	int32_t z, dzdx, dzdy;
@@ -27,7 +30,6 @@ struct PrimitiveSetup
 	int16_t dcolor_dx[4];
 	int16_t dcolor_dy[4];
 
-	int16_t u, dudx, dudy;
-	int16_t v, dvdx, dvdy;
+	uint16_t flags;
 };
 }

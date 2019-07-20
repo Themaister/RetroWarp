@@ -114,14 +114,14 @@ int main()
 			prim.vertices[0] = vertices[128 * (y + 0) + (x + 0)];
 			prim.vertices[1] = vertices[128 * (y + 0) + (x + 1)];
 			prim.vertices[2] = vertices[128 * (y + 1) + (x + 0)];
-			setup_triangle(setup, prim);
-			rasterizer.render_primitive(setup);
+			if (setup_triangle(setup, prim, CullMode::CWOnly))
+				rasterizer.render_primitive(setup);
 
 			prim.vertices[0] = vertices[128 * (y + 1) + (x + 1)];
 			prim.vertices[1] = vertices[128 * (y + 1) + (x + 0)];
 			prim.vertices[2] = vertices[128 * (y + 0) + (x + 1)];
-			setup_triangle(setup, prim);
-			rasterizer.render_primitive(setup);
+			if (setup_triangle(setup, prim, CullMode::CWOnly))
+				rasterizer.render_primitive(setup);
 			fprintf(stderr, "=== ===\n");
 		}
 	}

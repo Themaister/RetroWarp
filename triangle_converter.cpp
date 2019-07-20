@@ -5,17 +5,7 @@
 
 namespace RetroWarp
 {
-static int32_t quantize_x(float x)
-{
-	x *= float(1 << 19);
-	return int32_t(std::round(x));
-}
-
-static int16_t quantize_y(float y)
-{
-	y *= float(1 << 3);
-	return int16_t(std::round(y));
-}
+enum { SUBPIXELS_LOG2 = 3 };
 
 static int16_t clamp_float_int16(float v)
 {
@@ -25,6 +15,12 @@ static int16_t clamp_float_int16(float v)
 		return 0x7fff;
 	else
 		return int16_t(v);
+}
+
+static int16_t quantize_xy(float x)
+{
+	x *= float(1 << SUBPIXELS_LOG2);
+	return clamp_float_int16(std::round(x));
 }
 
 static void quantize_color(int16_t output[4], const float input[4])
@@ -54,14 +50,13 @@ static int16_t quantize_uv(float v)
 	return clamp_float_int16(rounded);
 }
 
-void setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input)
+bool setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input, CullMode cull_mode)
 {
 	setup = {};
 
 	// Assume no clipping is required for now.
-	const int32_t xs[] = { quantize_x(input.vertices[0].x), quantize_x(input.vertices[1].x), quantize_x(input.vertices[2].x) };
-	const int16_t ys[] = { quantize_y(input.vertices[0].y), quantize_y(input.vertices[1].y), quantize_y(input.vertices[2].y) };
-	const int16_t xs_snapped[] = { int16_t(xs[0] >> 16), int16_t(xs[1] >> 16), int16_t(xs[2] >> 16) };
+	const int32_t xs[] = { quantize_xy(input.vertices[0].x), quantize_xy(input.vertices[1].x), quantize_xy(input.vertices[2].x) };
+	const int16_t ys[] = { quantize_xy(input.vertices[0].y), quantize_xy(input.vertices[1].y), quantize_xy(input.vertices[2].y) };
 
 	int index_a = 0;
 	int index_b = 1;
@@ -79,41 +74,47 @@ void setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input)
 	int16_t y_mid = ys[index_b];
 	int16_t y_hi = ys[index_c];
 
-	int32_t x_a = xs[index_a];
-	int32_t x_b = xs[index_b];
-	int32_t x_c = xs[index_c];
+	int16_t x_a = xs[index_a];
+	int16_t x_b = xs[index_b];
+	int16_t x_c = xs[index_c];
 
-	setup.x_a = x_a;
-	setup.x_b = x_a;
-	setup.x_c = x_b;
+	setup.x_a = x_a << 16;
+	setup.x_b = x_a << 16;
+	setup.x_c = x_b << 16;
 
 	setup.y_lo = y_lo;
 	setup.y_mid = y_mid;
 	setup.y_hi = y_hi;
 
 	// Compute slopes.
-	setup.dxdy_a = (x_c - x_a) / std::max(1, y_hi - y_lo);
-	setup.dxdy_b = (x_b - x_a) / std::max(1, y_mid - y_lo);
-	setup.dxdy_c = (x_c - x_b) / std::max(1, y_hi - y_mid);
+	// Can only shift by 15 here since subtraction adds another bit of range.
+	setup.dxdy_a = ((x_c - x_a) << 15) / (std::max(1 << SUBPIXELS_LOG2, y_hi - y_lo) << 1);
+	setup.dxdy_b = ((x_b - x_a) << 15) / (std::max(1 << SUBPIXELS_LOG2, y_mid - y_lo) << 1);
+	setup.dxdy_c = ((x_c - x_b) << 15) / (std::max(1 << SUBPIXELS_LOG2, y_hi - y_mid) << 1);
+
 	if (setup.dxdy_b < setup.dxdy_a)
 		setup.flags |= PRIMITIVE_RIGHT_MAJOR_BIT;
 
 	quantize_color(setup.color, input.vertices[index_a].color);
 
 	// Compute interpolation derivatives.
-	int ab_x = xs_snapped[1] - xs_snapped[0];
+	int ab_x = xs[1] - xs[0];
 	int ab_y = ys[1] - ys[0];
-	int bc_x = xs_snapped[2] - xs_snapped[1];
+	int bc_x = xs[2] - xs[1];
 	int bc_y = ys[2] - ys[1];
-	int ca_x = xs_snapped[0] - xs_snapped[2];
+	int ca_x = xs[0] - xs[2];
 	int ca_y = ys[0] - ys[2];
 	int signed_area = ab_x * bc_y - ab_y * bc_x;
 
 	// Check if triangle is degenerate. Compute derivatives.
 	if (signed_area == 0)
-		return;
+		return false;
+	else if (cull_mode == CullMode::CCWOnly && signed_area > 0)
+		return false;
+	else if (cull_mode == CullMode::CWOnly && signed_area < 0)
+		return false;
 
-	float inv_signed_area = float(1 << 3) / float(signed_area);
+	float inv_signed_area = float(1 << SUBPIXELS_LOG2) / float(signed_area);
 	float dcolor_dx[4];
 	float dcolor_dy[4];
 
@@ -181,9 +182,9 @@ void setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input)
 	setup.flags |= PRIMITIVE_PERSPECTIVE_CORRECT_BIT;
 
 	// Interpolations are based on the integer coordinate of the top vertex.
-	int x_subpel_offset = (x_a >> 16) & 7;
-	int y_subpel_offset_lo = y_lo & 7;
-	int y_subpel_offset_mid = y_mid & 7;
+	int x_subpel_offset = x_a & ((1 << SUBPIXELS_LOG2) - 1);
+	int y_subpel_offset_lo = y_lo & ((1 << SUBPIXELS_LOG2) - 1);
+	int y_subpel_offset_mid = y_mid & ((1 << SUBPIXELS_LOG2) - 1);
 
 	// Adjust interpolants for sub-pixel precision.
 	setup.x_a -= setup.dxdy_a * y_subpel_offset_lo;
@@ -191,11 +192,13 @@ void setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input)
 	setup.x_c -= setup.dxdy_c * y_subpel_offset_mid;
 
 	for (int c = 0; c < 4; c++)
-		setup.color[c] -= (setup.dcolor_dx[c] >> 3) * x_subpel_offset + (setup.dcolor_dy[c] >> 3) * y_subpel_offset_lo;
+		setup.color[c] -= (setup.dcolor_dx[c] >> SUBPIXELS_LOG2) * x_subpel_offset + (setup.dcolor_dy[c] >> SUBPIXELS_LOG2) * y_subpel_offset_lo;
 
-	setup.z -= (setup.dzdx >> 3) * x_subpel_offset + (setup.dzdy >> 3) * y_subpel_offset_lo;
-	setup.w -= (setup.dwdx >> 3) * x_subpel_offset + (setup.dwdy >> 3) * y_subpel_offset_lo;
-	setup.u -= (setup.dudx >> 3) * x_subpel_offset + (setup.dudy >> 3) * y_subpel_offset_lo;
-	setup.v -= (setup.dvdx >> 3) * x_subpel_offset + (setup.dvdy >> 3) * y_subpel_offset_lo;
+	setup.z -= (setup.dzdx >> SUBPIXELS_LOG2) * x_subpel_offset + (setup.dzdy >> SUBPIXELS_LOG2) * y_subpel_offset_lo;
+	setup.w -= (setup.dwdx >> SUBPIXELS_LOG2) * x_subpel_offset + (setup.dwdy >> SUBPIXELS_LOG2) * y_subpel_offset_lo;
+	setup.u -= (setup.dudx >> SUBPIXELS_LOG2) * x_subpel_offset + (setup.dudy >> SUBPIXELS_LOG2) * y_subpel_offset_lo;
+	setup.v -= (setup.dvdx >> SUBPIXELS_LOG2) * x_subpel_offset + (setup.dvdy >> SUBPIXELS_LOG2) * y_subpel_offset_lo;
+
+	return true;
 }
 }

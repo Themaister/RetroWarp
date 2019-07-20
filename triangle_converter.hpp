@@ -20,5 +20,12 @@ struct InputPrimitive
 	Vertex vertices[3];
 };
 
-void setup_triangle(PrimitiveSetup &prim, const InputPrimitive &input);
+enum class CullMode
+{
+	None,
+	CCWOnly,
+	CWOnly
+};
+
+bool setup_triangle(PrimitiveSetup &prim, const InputPrimitive &input, CullMode mode);
 }
