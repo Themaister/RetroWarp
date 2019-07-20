@@ -1,24 +1,11 @@
 #include "rasterizer_cpu.hpp"
-#include "stb_image_write.h"
+#include <utility>
+#include <algorithm>
 #include <assert.h>
+#include <stdio.h>
 
 namespace RetroWarp
 {
-void RasterizerCPU::resize(unsigned width, unsigned height)
-{
-	canvas.resize(width, height);
-}
-
-Canvas<uint32_t> &RasterizerCPU::get_canvas()
-{
-	return canvas;
-}
-
-const Canvas<uint32_t> &RasterizerCPU::get_canvas() const
-{
-	return canvas;
-}
-
 void RasterizerCPU::set_scissor(int x, int y, int width, int height)
 {
 	scissor.x = x;
@@ -39,6 +26,7 @@ static int clamp_unorm8(int v)
 
 void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 {
+	fprintf(stderr, "=== START PRIMITIVE ===\n");
 	// X coordinates are represented as 16.3(.13) signed fixed point.
 	// Y coordinates are represented as 14.2 signed fixed point.
 
@@ -53,11 +41,6 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 	// Scissor.
 	if (span_begin_y < scissor.y)
 		span_begin_y = scissor.y;
-	if (span_begin_y >= scissor.y + scissor.height)
-		span_begin_y = scissor.y + scissor.height - 1;
-
-	if (span_end_y < scissor.y)
-		span_end_y = scissor.y;
 	if (span_end_y >= scissor.y + scissor.height)
 		span_end_y = scissor.y + scissor.height - 1;
 
@@ -74,7 +57,7 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 		int primary_x = x_a;
 		int secondary_x = select_hi ? x_c : x_b;
 
-		// Preserve 3 sub-pixels, X is now 16.3.
+		// Preserve 3 sub-pixels, X is now 13.3.
 		primary_x >>= 16;
 		secondary_x >>= 16;
 		if (prim.flags & PRIMITIVE_RIGHT_MAJOR_BIT)
@@ -83,8 +66,8 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 		// Compute the span for this scanline.
 		int start_x = (primary_x + 7) >> 3;
 		int end_x = (secondary_x - 1) >> 3;
-		if (start_x >= end_x)
-			continue;
+
+		fprintf(stderr, "  Y: %d: [%d, %d]\n", y, start_x, end_x);
 
 		if (start_x < scissor.x)
 			start_x = scissor.x;
@@ -93,6 +76,7 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 
 		// We've passed the rasterization test. Interpolate colors, Z, 1/W.
 		int dy = y - interpolation_base_ylo;
+
 		for (int x = start_x; x <= end_x; x++)
 		{
 			int dx = x - interpolation_base_x;
@@ -131,11 +115,10 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 			auto tex = filter_linear_vert(tex_0, tex_1, sub_v);
 
 			tex = multiply_unorm8(tex, { uint8_t(r), uint8_t(g), uint8_t(b), uint8_t(a) });
-
-			uint32_t argb = (uint32_t(tex.a) << 24) | (uint32_t(tex.b) << 16) | (uint32_t(tex.g) << 8) | (uint32_t(tex.r) << 0);
-			canvas.get(x, y) = argb;
+			rop->emit_pixel(x, y, tex);
 		}
 	}
+	fprintf(stderr, "=== END PRIMITIVE ===\n\n");
 }
 
 RasterizerCPU::FilteredTexel RasterizerCPU::filter_linear_horiz(const Texel &left, const Texel &right, int weight)
@@ -182,25 +165,14 @@ Texel RasterizerCPU::multiply_unorm8(const Texel &left, const Texel &right)
 	};
 }
 
-void RasterizerCPU::fill_alpha_opaque()
-{
-	for (unsigned y = 0; y < canvas.get_height(); y++)
-	{
-		for (unsigned x = 0; x < canvas.get_width(); x++)
-		{
-			canvas.get(x, y) |= 0xff000000u;
-		}
-	}
-}
 
 void RasterizerCPU::set_sampler(Sampler *sampler_)
 {
 	sampler = sampler_;
 }
 
-bool RasterizerCPU::save_canvas(const char *path) const
+void RasterizerCPU::set_rop(ROP *rop_)
 {
-	const void *data = canvas.get_data();
-	return stbi_write_png(path, canvas.get_width(), canvas.get_height(), 4, data, canvas.get_width() * 4);
+	rop = rop_;
 }
 }

@@ -1,7 +1,6 @@
 #pragma once
 
 #include "primitive_setup.hpp"
-#include "canvas.hpp"
 
 namespace RetroWarp
 {
@@ -15,26 +14,25 @@ struct Sampler
 	virtual Texel sample(int u, int v) = 0;
 };
 
+struct ROP
+{
+	virtual void emit_pixel(int x, int v, const Texel &texel) = 0;
+};
+
 class RasterizerCPU
 {
 public:
-	void resize(unsigned width, unsigned height);
 	void render_primitive(const PrimitiveSetup &prim);
-
-	Canvas<uint32_t> &get_canvas();
-	const Canvas<uint32_t> &get_canvas() const;
 
 	void set_scissor(int x, int y, int width, int height);
 
-	void fill_alpha_opaque();
-
-	bool save_canvas(const char *path) const;
-
 	void set_sampler(Sampler *sampler);
+	void set_rop(ROP *rop);
 
 private:
-	Canvas<uint32_t> canvas;
 	Sampler *sampler = nullptr;
+	ROP *rop = nullptr;
+
 	struct
 	{
 		int x = 0;

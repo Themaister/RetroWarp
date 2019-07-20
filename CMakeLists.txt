@@ -50,9 +50,8 @@ add_library(rasterizer STATIC
         rasterizer_cpu.hpp rasterizer_cpu.cpp)
 target_compile_options(rasterizer PRIVATE ${RETROWARP_CXX_FLAGS})
 target_include_directories(rasterizer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(rasterizer PRIVATE stb)
 
 add_executable(test test.cpp)
 target_compile_options(test PRIVATE ${RETROWARP_CXX_FLAGS})
-target_link_libraries(test PRIVATE rasterizer)
+target_link_libraries(test PRIVATE rasterizer stb)
 

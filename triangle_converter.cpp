@@ -59,27 +59,29 @@ void setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input)
 	setup = {};
 
 	// Assume no clipping is required for now.
-	const float y[] = { input.vertices[0].y, input.vertices[1].y, input.vertices[2].y };
+	const int32_t xs[] = { quantize_x(input.vertices[0].x), quantize_x(input.vertices[1].x), quantize_x(input.vertices[2].x) };
+	const int16_t ys[] = { quantize_y(input.vertices[0].y), quantize_y(input.vertices[1].y), quantize_y(input.vertices[2].y) };
+	const int16_t xs_snapped[] = { int16_t(xs[0] >> 16), int16_t(xs[1] >> 16), int16_t(xs[2] >> 16) };
 
 	int index_a = 0;
 	int index_b = 1;
 	int index_c = 2;
 
 	// Sort primitives by height.
-	if (y[index_b] < y[index_a])
+	if (ys[index_b] < ys[index_a])
 		std::swap(index_b, index_a);
-	if (y[index_c] < y[index_b])
+	if (ys[index_c] < ys[index_b])
 		std::swap(index_c, index_b);
-	if (y[index_b] < y[index_a])
+	if (ys[index_b] < ys[index_a])
 		std::swap(index_b, index_a);
 
-	int16_t y_lo = quantize_y(y[index_a]);
-	int16_t y_mid = quantize_y(y[index_b]);
-	int16_t y_hi = quantize_y(y[index_c]);
+	int16_t y_lo = ys[index_a];
+	int16_t y_mid = ys[index_b];
+	int16_t y_hi = ys[index_c];
 
-	int32_t x_a = quantize_x(input.vertices[index_a].x);
-	int32_t x_b = quantize_x(input.vertices[index_b].x);
-	int32_t x_c = quantize_x(input.vertices[index_c].x);
+	int32_t x_a = xs[index_a];
+	int32_t x_b = xs[index_b];
+	int32_t x_c = xs[index_c];
 
 	setup.x_a = x_a;
 	setup.x_b = x_a;
@@ -99,13 +101,12 @@ void setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input)
 	quantize_color(setup.color, input.vertices[index_a].color);
 
 	// Compute interpolation derivatives.
-	// FIXME: Compute this post vertex snapping!
-	int ab_x = (quantize_x(input.vertices[1].x) >> 16) - (quantize_x(input.vertices[0].x) >> 16);
-	int ab_y = quantize_y(input.vertices[1].y) - quantize_y(input.vertices[0].y);
-	int bc_x = (quantize_x(input.vertices[2].x) >> 16) - (quantize_x(input.vertices[1].x) >> 16);
-	int bc_y = quantize_y(input.vertices[2].y) - quantize_y(input.vertices[1].y);
-	int ca_x = (quantize_x(input.vertices[0].x) >> 16) - (quantize_x(input.vertices[2].x) >> 16);
-	int ca_y = quantize_y(input.vertices[0].y) - quantize_y(input.vertices[2].y);
+	int ab_x = xs_snapped[1] - xs_snapped[0];
+	int ab_y = ys[1] - ys[0];
+	int bc_x = xs_snapped[2] - xs_snapped[1];
+	int bc_y = ys[2] - ys[1];
+	int ca_x = xs_snapped[0] - xs_snapped[2];
+	int ca_y = ys[0] - ys[2];
 	int signed_area = ab_x * bc_y - ab_y * bc_x;
 
 	// Check if triangle is degenerate. Compute derivatives.
