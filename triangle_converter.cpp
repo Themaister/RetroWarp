@@ -17,16 +17,6 @@ static int16_t quantize_y(float y)
 	return int16_t(std::round(y));
 }
 
-static uint16_t clamp_float_uint16(float v)
-{
-	if (v < 0.0f)
-		return 0;
-	else if (v >= 0xffff)
-		return 0xffff;
-	else
-		return uint16_t(v);
-}
-
 static int16_t clamp_float_int16(float v)
 {
 	if (v < float(-0x8000))
