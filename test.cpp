@@ -108,20 +108,22 @@ int main()
 			        vertices[128 * (y + 1) + (x + 1)].x,
 			        vertices[128 * (y + 1) + (x + 1)].y);
 
-			PrimitiveSetup setup;
-			InputPrimitive prim = {};
+			PrimitiveSetup setup[256];
+			InputPrimitive prim;
 
 			prim.vertices[0] = vertices[128 * (y + 0) + (x + 0)];
 			prim.vertices[1] = vertices[128 * (y + 0) + (x + 1)];
 			prim.vertices[2] = vertices[128 * (y + 1) + (x + 0)];
-			if (setup_triangle(setup, prim, CullMode::CWOnly))
-				rasterizer.render_primitive(setup);
+			unsigned count = setup_clipped_triangles(setup, prim, CullMode::CWOnly);
+			for (unsigned i = 0; i < count; i++)
+				rasterizer.render_primitive(setup[i]);
 
 			prim.vertices[0] = vertices[128 * (y + 1) + (x + 1)];
 			prim.vertices[1] = vertices[128 * (y + 1) + (x + 0)];
 			prim.vertices[2] = vertices[128 * (y + 0) + (x + 1)];
-			if (setup_triangle(setup, prim, CullMode::CWOnly))
-				rasterizer.render_primitive(setup);
+			count = setup_clipped_triangles(setup, prim, CullMode::CWOnly);
+			for (unsigned i = 0; i < count; i++)
+				rasterizer.render_primitive(setup[i]);
 			fprintf(stderr, "=== ===\n");
 		}
 	}

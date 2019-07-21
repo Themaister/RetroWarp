@@ -6,10 +6,18 @@ namespace RetroWarp
 {
 struct Vertex
 {
-	float x;
-	float y;
-	float z;
-	float w;
+	union
+	{
+		struct
+		{
+			float x;
+			float y;
+			float z;
+			float w;
+		};
+		float clip[4];
+	};
+
 	float u;
 	float v;
 	float color[4];
@@ -27,5 +35,5 @@ enum class CullMode
 	CWOnly
 };
 
-bool setup_triangle(PrimitiveSetup &prim, const InputPrimitive &input, CullMode mode);
+unsigned setup_clipped_triangles(PrimitiveSetup prim[8], const InputPrimitive &input, CullMode mode);
 }
