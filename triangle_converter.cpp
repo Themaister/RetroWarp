@@ -5,8 +5,6 @@
 
 namespace RetroWarp
 {
-enum { SUBPIXELS_LOG2 = 3 };
-
 static int16_t clamp_float_int16(float v)
 {
 	if (v < float(-0x8000))
@@ -55,7 +53,7 @@ static bool setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input, C
 	setup = {};
 
 	// Assume no clipping is required for now.
-	const int32_t xs[] = { quantize_xy(input.vertices[0].x), quantize_xy(input.vertices[1].x), quantize_xy(input.vertices[2].x) };
+	const int16_t xs[] = { quantize_xy(input.vertices[0].x), quantize_xy(input.vertices[1].x), quantize_xy(input.vertices[2].x) };
 	const int16_t ys[] = { quantize_xy(input.vertices[0].y), quantize_xy(input.vertices[1].y), quantize_xy(input.vertices[2].y) };
 
 	int index_a = 0;
@@ -88,9 +86,9 @@ static bool setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input, C
 
 	// Compute slopes.
 	// Can only shift by 15 here since subtraction adds another bit of range.
-	setup.dxdy_a = ((x_c - x_a) << 15) / (std::max(1 << SUBPIXELS_LOG2, y_hi - y_lo) << 1);
-	setup.dxdy_b = ((x_b - x_a) << 15) / (std::max(1 << SUBPIXELS_LOG2, y_mid - y_lo) << 1);
-	setup.dxdy_c = ((x_c - x_b) << 15) / (std::max(1 << SUBPIXELS_LOG2, y_hi - y_mid) << 1);
+	setup.dxdy_a = ((x_c - x_a) << 15) / std::max(1 << SUBPIXELS_LOG2, (y_hi - y_lo) >> 1);
+	setup.dxdy_b = ((x_b - x_a) << 15) / std::max(1 << SUBPIXELS_LOG2, (y_mid - y_lo) >> 1);
+	setup.dxdy_c = ((x_c - x_b) << 15) / std::max(1 << SUBPIXELS_LOG2, (y_hi - y_mid) >> 1);
 
 	if (setup.dxdy_b < setup.dxdy_a)
 		setup.flags |= PRIMITIVE_RIGHT_MAJOR_BIT;
@@ -202,23 +200,6 @@ static bool setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input, C
 	return true;
 }
 
-static bool complete_triangle(PrimitiveSetup &setup, InputPrimitive &prim, CullMode mode)
-{
-	for (int i = 0; i < 3; i++)
-	{
-		float inv_w = 1.0f / prim.vertices[i].w;
-		prim.vertices[i].x *= inv_w;
-		prim.vertices[i].y *= inv_w;
-		prim.vertices[i].z *= inv_w;
-		prim.vertices[i].u *= inv_w;
-		prim.vertices[i].v *= inv_w;
-		prim.vertices[i].w = inv_w;
-	}
-	return setup_triangle(setup, prim, mode);
-	return 1;
-}
-
-
 static void interpolate_vertex(Vertex &v, const Vertex &a, const Vertex &b, float l)
 {
 	float left = 1.0f - l;
@@ -243,20 +224,11 @@ static unsigned get_clip_code_low(const InputPrimitive &prim, float limit, unsig
 	return clip_code;
 }
 
-static unsigned get_clip_code_low(const InputPrimitive &prim, float limit_a, float limit_b, float limit_c, unsigned comp)
+static unsigned get_clip_code_high(const InputPrimitive &prim, float limit, unsigned comp)
 {
-	bool clip_a = prim.vertices[0].clip[comp] < limit_a;
-	bool clip_b = prim.vertices[1].clip[comp] < limit_b;
-	bool clip_c = prim.vertices[2].clip[comp] < limit_c;
-	unsigned clip_code = (unsigned(clip_a) << 0) | (unsigned(clip_b) << 1) | (unsigned(clip_c) << 2);
-	return clip_code;
-}
-
-static unsigned get_clip_code_high(const InputPrimitive &prim, float limit_a, float limit_b, float limit_c, unsigned comp)
-{
-	bool clip_a = prim.vertices[0].clip[comp] > limit_a;
-	bool clip_b = prim.vertices[1].clip[comp] > limit_b;
-	bool clip_c = prim.vertices[2].clip[comp] > limit_c;
+	bool clip_a = prim.vertices[0].clip[comp] > limit;
+	bool clip_b = prim.vertices[1].clip[comp] > limit;
+	bool clip_c = prim.vertices[2].clip[comp] > limit;
 	unsigned clip_code = (unsigned(clip_a) << 0) | (unsigned(clip_b) << 1) | (unsigned(clip_c) << 2);
 	return clip_code;
 }
@@ -264,84 +236,33 @@ static unsigned get_clip_code_high(const InputPrimitive &prim, float limit_a, fl
 static void clip_single_output(InputPrimitive &output, const InputPrimitive &input, unsigned component, float target,
                                unsigned a, unsigned b, unsigned c)
 {
-	float interpolate_a;
-	float interpolate_b;
-	if (component == 3)
-	{
-		interpolate_a = (target - input.vertices[a].clip[component]) /
-		                (input.vertices[c].clip[component] - input.vertices[a].clip[component]);
-		interpolate_b = (target - input.vertices[b].clip[component]) /
-		                (input.vertices[c].clip[component] - input.vertices[b].clip[component]);
-	}
-	else
-	{
-		// Interpolate in clip-space.
-		float target_a = input.vertices[a].w * target;
-		float target_b = input.vertices[b].w * target;
-
-		float diff_a = input.vertices[a].clip[component] - target_a;
-		float diff_b = input.vertices[b].clip[component] - target_b;
-		float diff_c = input.vertices[c].clip[component] - input.vertices[c].w;
-		interpolate_a = diff_a / (diff_a - diff_c);
-		interpolate_b = diff_b / (diff_b - diff_c);
-	}
+	float interpolate_a = (target - input.vertices[a].clip[component]) /
+	                      (input.vertices[c].clip[component] - input.vertices[a].clip[component]);
+	float interpolate_b = (target - input.vertices[b].clip[component]) /
+	                      (input.vertices[c].clip[component] - input.vertices[b].clip[component]);
 
 	interpolate_vertex(output.vertices[a], input.vertices[a], input.vertices[c], interpolate_a);
 	interpolate_vertex(output.vertices[b], input.vertices[b], input.vertices[c], interpolate_b);
 
-	if (component == 3)
-	{
-		output.vertices[a].clip[component] = target;
-		output.vertices[b].clip[component] = target;
-	}
-	else
-	{
-		output.vertices[a].clip[component] = target * output.vertices[a].w;
-		output.vertices[b].clip[component] = target * output.vertices[b].w;
-	}
-
+	output.vertices[a].clip[component] = target;
+	output.vertices[b].clip[component] = target;
 	output.vertices[c] = input.vertices[c];
 }
 
 static void clip_dual_output(InputPrimitive *output, const InputPrimitive &input, unsigned component, float target,
                              unsigned a, unsigned b, unsigned c)
 {
-	float interpolate_ab;
-	float interpolate_ac;
-	if (component == 3)
-	{
-		interpolate_ab = (target - input.vertices[a].clip[component]) /
-		                 (input.vertices[b].clip[component] - input.vertices[a].clip[component]);
-		interpolate_ac = (target - input.vertices[a].clip[component]) /
-		                 (input.vertices[c].clip[component] - input.vertices[a].clip[component]);
-	}
-	else
-	{
-		// Interpolate in clip-space.
-		float target_a = input.vertices[a].w * target;
-
-		float diff_a = input.vertices[a].clip[component] - target_a;
-		float diff_b = input.vertices[b].clip[component] - input.vertices[b].w;
-		float diff_c = input.vertices[c].clip[component] - input.vertices[c].w;
-
-		interpolate_ab = diff_a / (diff_a - diff_b);
-		interpolate_ac = diff_a / (diff_a - diff_c);
-	}
+	float interpolate_ab = (target - input.vertices[a].clip[component]) /
+	                       (input.vertices[b].clip[component] - input.vertices[a].clip[component]);
+	float interpolate_ac = (target - input.vertices[a].clip[component]) /
+	                       (input.vertices[c].clip[component] - input.vertices[a].clip[component]);
 
 	Vertex ab, ac;
 	interpolate_vertex(ab, input.vertices[a], input.vertices[b], interpolate_ab);
 	interpolate_vertex(ac, input.vertices[a], input.vertices[c], interpolate_ac);
 
-	if (component == 3)
-	{
-		ab.clip[component] = target;
-		ac.clip[component] = target;
-	}
-	else
-	{
-		ab.clip[component] = target * ab.w;
-		ac.clip[component] = target * ac.w;
-	}
+	ab.clip[component] = target;
+	ac.clip[component] = target;
 
 	output[0].vertices[0] = ab;
 	output[0].vertices[1] = input.vertices[b];
@@ -406,15 +327,11 @@ static unsigned clip_triangles(InputPrimitive *outputs, const InputPrimitive *in
 
 	for (unsigned i = 0; i < count; i++)
 	{
-		float targets[3];
-		for (unsigned j = 0; j < 3; j++)
-			targets[j] = target * inputs[i].vertices[j].w;
-
 		unsigned clip_code;
-		if (target > 1.0f)
-			clip_code = get_clip_code_high(inputs[i], targets[0], targets[1], targets[2], component);
+		if (target > 0.0f)
+			clip_code = get_clip_code_high(inputs[i], target, component);
 		else
-			clip_code = get_clip_code_low(inputs[i], targets[0], targets[1], targets[2], component);
+			clip_code = get_clip_code_low(inputs[i], target, component);
 
 		unsigned clipped_count = clip_component(outputs, inputs[i], component, target, clip_code);
 		output_count += clipped_count;
@@ -424,34 +341,56 @@ static unsigned clip_triangles(InputPrimitive *outputs, const InputPrimitive *in
 	return output_count;
 }
 
-static unsigned setup_clipped_triangles_clipped_w(PrimitiveSetup *setup, InputPrimitive &prim, CullMode mode)
+static unsigned setup_clipped_triangles_clipped_w(PrimitiveSetup *setup, InputPrimitive &prim, CullMode mode, const ViewportTransform &vp)
 {
-	// First, clip against negative X.
 	InputPrimitive tmp_a[256];
 	InputPrimitive tmp_b[256];
 
-	// Clip -X.
+	for (unsigned i = 0; i < 3; i++)
+	{
+		float iw = 1.0f / prim.vertices[i].w;
+		prim.vertices[i].x *= iw;
+		prim.vertices[i].y *= iw;
+		prim.vertices[i].z *= iw;
+		prim.vertices[i].u *= iw;
+		prim.vertices[i].v *= iw;
+		prim.vertices[i].w = iw;
+	}
+
+	// Clip -X on guard bard.
 	unsigned count = clip_triangles(tmp_a, &prim, 1, 0, -1.0f);
-	// Clip +X.
+	// Clip +X on guard band.
 	count = clip_triangles(tmp_b, tmp_a, count, 0, +1.0f);
-	// Clip -Y.
+	// Clip -Y on guard band.
 	count = clip_triangles(tmp_a, tmp_b, count, 1, -1.0f);
-	// Clip +Y.
+	// Clip +Y on guard band.
 	count = clip_triangles(tmp_b, tmp_a, count, 1, +1.0f);
-	// Clip near.
+	// Clip near, before viewport transform.
 	count = clip_triangles(tmp_a, tmp_b, count, 2, 0.0f);
-	// Clip far.
+	// Clip far, before viewport transform.
 	count = clip_triangles(tmp_b, tmp_a, count, 2, +1.0f);
 
 	unsigned output_count = 0;
 	for (unsigned i = 0; i < count; i++)
-		if (complete_triangle(setup[output_count], tmp_b[i], mode))
+	{
+		// Apply viewport transform for Z.
+		auto &prim = tmp_b[i];
+		for (unsigned j = 0; j < 3; j++)
+		{
+			// Apply viewport transform for X/Y.
+			prim.vertices[j].x = vp.x + (0.5f * prim.vertices[j].x + 0.5f) * vp.width;
+			prim.vertices[j].y = vp.y + (0.5f * prim.vertices[j].y + 0.5f) * vp.height;
+			prim.vertices[j].z = vp.min_depth + prim.vertices[j].z * (vp.max_depth - vp.min_depth);
+		}
+
+		if (setup_triangle(setup[output_count], tmp_b[i], mode))
 			output_count++;
+	}
 
 	return output_count;
 }
 
-unsigned setup_clipped_triangles(PrimitiveSetup *setup, const InputPrimitive &prim, CullMode mode)
+unsigned setup_clipped_triangles(PrimitiveSetup *setup, const InputPrimitive &prim, CullMode mode, const ViewportTransform &vp)
 {
 	// Don't clip against 0, since we have no way to deal with infinities in the rasterizer.
 	// W of 1.0 / 1024.0 is super close to eye anyways.
@@ -464,7 +403,7 @@ unsigned setup_clipped_triangles(PrimitiveSetup *setup, const InputPrimitive &pr
 
 	for (unsigned i = 0; i < clipped_w_count; i++)
 	{
-		unsigned count = setup_clipped_triangles_clipped_w(setup, clipped_w[i], mode);
+		unsigned count = setup_clipped_triangles_clipped_w(setup, clipped_w[i], mode, vp);
 		setup += count;
 		output_count += count;
 	}

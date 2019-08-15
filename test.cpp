@@ -72,61 +72,29 @@ int main()
 	rasterizer.set_sampler(&samp);
 	rasterizer.set_rop(&rop);
 
-	std::vector<Vertex> vertices(128 * 128);
-	std::uniform_real_distribution<float> dist(-0.3f, 0.3f);
-	std::mt19937 rnd(42);
+	ViewportTransform vp = { 0.0f, 0.0f, 256.0f, 256.0f, 0.0f, 1.0f };
 
-	for (int y = 0; y < 128; y++)
-	{
-		for (int x = 0; x < 128; x++)
-		{
-			auto &v = vertices[y * 128 + x];
-			v.x = 2.0f * float(x) - 64.0f + dist(rnd);
-			v.y = 2.0f * float(y) - 64.0f + dist(rnd);
-		}
-	}
+	InputPrimitive prim = {};
+	prim.vertices[0].x = -0.5f;
+	prim.vertices[0].y = -2.0f;
+	prim.vertices[0].z = 0.0f;
+	prim.vertices[0].w = 1.0f;
 
-	for (int y = 0; y < 127; y++)
-	{
-		for (int x = 0; x < 127; x++)
-		{
-			fprintf(stderr, "=== RENDER QUAD %d, %d ===\n", x, y);
+	prim.vertices[1].x = +0.5f;
+	prim.vertices[1].y = -2.0f;
+	prim.vertices[1].z = 0.0f;
+	prim.vertices[1].w = 1.0f;
 
-			fprintf(stderr, " (%.3f, %.3f)\n",
-			        vertices[128 * (y + 0) + (x + 0)].x,
-			        vertices[128 * (y + 0) + (x + 0)].y);
+	prim.vertices[2].x = 0.0f;
+	prim.vertices[2].y = 0.0f;
+	prim.vertices[2].z = 0.0f;
+	prim.vertices[2].w = 1.0f;
 
-			fprintf(stderr, " (%.3f, %.3f)\n",
-			        vertices[128 * (y + 0) + (x + 1)].x,
-			        vertices[128 * (y + 0) + (x + 1)].y);
+	PrimitiveSetup setup[256];
 
-			fprintf(stderr, " (%.3f, %.3f)\n",
-			        vertices[128 * (y + 1) + (x + 0)].x,
-			        vertices[128 * (y + 1) + (x + 0)].y);
-
-			fprintf(stderr, " (%.3f, %.3f)\n",
-			        vertices[128 * (y + 1) + (x + 1)].x,
-			        vertices[128 * (y + 1) + (x + 1)].y);
-
-			PrimitiveSetup setup[256];
-			InputPrimitive prim;
-
-			prim.vertices[0] = vertices[128 * (y + 0) + (x + 0)];
-			prim.vertices[1] = vertices[128 * (y + 0) + (x + 1)];
-			prim.vertices[2] = vertices[128 * (y + 1) + (x + 0)];
-			unsigned count = setup_clipped_triangles(setup, prim, CullMode::CWOnly);
-			for (unsigned i = 0; i < count; i++)
-				rasterizer.render_primitive(setup[i]);
-
-			prim.vertices[0] = vertices[128 * (y + 1) + (x + 1)];
-			prim.vertices[1] = vertices[128 * (y + 1) + (x + 0)];
-			prim.vertices[2] = vertices[128 * (y + 0) + (x + 1)];
-			count = setup_clipped_triangles(setup, prim, CullMode::CWOnly);
-			for (unsigned i = 0; i < count; i++)
-				rasterizer.render_primitive(setup[i]);
-			fprintf(stderr, "=== ===\n");
-		}
-	}
+	unsigned count = setup_clipped_triangles(setup, prim, CullMode::None, vp);
+	for (unsigned i = 0; i < count; i++)
+		rasterizer.render_primitive(setup[i]);
 
 	rop.fill_alpha_opaque();
 	rop.save_canvas("/tmp/test.png");

@@ -35,5 +35,15 @@ enum class CullMode
 	CWOnly
 };
 
-unsigned setup_clipped_triangles(PrimitiveSetup prim[8], const InputPrimitive &input, CullMode mode);
+struct ViewportTransform
+{
+	float x;
+	float y;
+	float width;
+	float height;
+	float min_depth;
+	float max_depth;
+};
+
+unsigned setup_clipped_triangles(PrimitiveSetup prim[8], const InputPrimitive &input, CullMode mode, const ViewportTransform &vp);
 }

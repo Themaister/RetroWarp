@@ -27,16 +27,14 @@ static int clamp_unorm8(int v)
 void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 {
 	fprintf(stderr, "=== START PRIMITIVE ===\n");
-	// X coordinates are represented as 16.3(.13) signed fixed point.
-	// Y coordinates are represented as 14.2 signed fixed point.
 
 	// Interpolation of UV, Z, W and Color are all based off the floored integer coordinate.
-	int interpolation_base_x = prim.x_a >> 19;
-	int interpolation_base_ylo = prim.y_lo >> 3;
-	int interpolation_base_ymid = prim.y_mid >> 3;
+	int interpolation_base_x = prim.x_a >> (16 + SUBPIXELS_LOG2);
+	int interpolation_base_ylo = prim.y_lo >> SUBPIXELS_LOG2;
+	int interpolation_base_ymid = prim.y_mid >> SUBPIXELS_LOG2;
 
-	int span_begin_y = (prim.y_lo + 7) >> 3;
-	int span_end_y = (prim.y_hi - 1) >> 3;
+	int span_begin_y = (prim.y_lo + ((1 << SUBPIXELS_LOG2) - 1)) >> SUBPIXELS_LOG2;
+	int span_end_y = (prim.y_hi - 1) >> SUBPIXELS_LOG2;
 
 	// Scissor.
 	if (span_begin_y < scissor.y)
@@ -48,12 +46,12 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 	{
 		// Need to interpolate at high resolution,
 		// since dxdy requires a very good resolution to resolve near vertical lines.
-		int x_a = prim.x_a + prim.dxdy_a * ((y - interpolation_base_ylo) << 3);
-		int x_b = prim.x_b + prim.dxdy_b * ((y - interpolation_base_ylo) << 3);
-		int x_c = prim.x_c + prim.dxdy_c * ((y - interpolation_base_ymid) << 3);
+		int x_a = prim.x_a + prim.dxdy_a * ((y - interpolation_base_ylo) << SUBPIXELS_LOG2);
+		int x_b = prim.x_b + prim.dxdy_b * ((y - interpolation_base_ylo) << SUBPIXELS_LOG2);
+		int x_c = prim.x_c + prim.dxdy_c * ((y - interpolation_base_ymid) << SUBPIXELS_LOG2);
 
 		// The secondary span edge is split into two edges.
-		bool select_hi = (y << 3) >= prim.y_mid;
+		bool select_hi = (y << SUBPIXELS_LOG2) >= prim.y_mid;
 		int primary_x = x_a;
 		int secondary_x = select_hi ? x_c : x_b;
 
@@ -64,8 +62,8 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 			std::swap(primary_x, secondary_x);
 
 		// Compute the span for this scanline.
-		int start_x = (primary_x + 7) >> 3;
-		int end_x = (secondary_x - 1) >> 3;
+		int start_x = (primary_x + ((1 << SUBPIXELS_LOG2) - 1)) >> SUBPIXELS_LOG2;
+		int end_x = (secondary_x - 1) >> SUBPIXELS_LOG2;
 
 		fprintf(stderr, "  Y: %d: [%d, %d]\n", y, start_x, end_x);
 

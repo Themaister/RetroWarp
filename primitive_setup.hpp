@@ -4,6 +4,8 @@
 
 namespace RetroWarp
 {
+enum { SUBPIXELS_LOG2 = 3 };
+
 enum PrimitiveFlagBits
 {
 	PRIMITIVE_RIGHT_MAJOR_BIT = 1 << 0,
