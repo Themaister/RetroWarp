@@ -23,25 +23,7 @@ if (${CMAKE_VERSION} VERSION_GREATER "3.13.0")
    cmake_policy(SET CMP0077 NEW)
 endif()
 
-add_subdirectory(stb EXCLUDE_FROM_ALL)
-
-#function(add_static_library NAME)
-#    add_library(${NAME} STATIC ${ARGN})
-#    if (${GRANITE_PLATFORM} MATCHES "libretro")
-#        set_target_properties(${NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON)
-#    elseif (GRANITE_POSITION_INDEPENDENT)
-#        set_target_properties(${NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON)
-#    elseif (GRANITE_SHARED)
-#        set_target_properties(${NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON)
-#    elseif (ANDROID)
-#        set_target_properties(${NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON)
-#    else()
-#        set_target_properties(${NAME} PROPERTIES POSITION_INDEPENDENT_CODE OFF)
-#    endif()
-#    target_compile_options(${NAME} PRIVATE ${RETROWARP_CXX_FLAGS})
-#endfunction()
-
-#add_subdirectory(Granite EXCLUDE_FROM_ALL)
+add_subdirectory(Granite EXCLUDE_FROM_ALL)
 
 add_library(rasterizer STATIC
         primitive_setup.hpp
@@ -53,5 +35,5 @@ target_include_directories(rasterizer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_executable(test test.cpp)
 target_compile_options(test PRIVATE ${RETROWARP_CXX_FLAGS})
-target_link_libraries(test PRIVATE rasterizer stb)
+target_link_libraries(test PRIVATE rasterizer granite stb)
 
