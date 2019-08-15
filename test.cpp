@@ -8,17 +8,33 @@
 #include <random>
 #include <assert.h>
 
-using namespace RetroWarp;
+#include "global_managers.hpp"
+#include "math.hpp"
+#include "texture_files.hpp"
+#include "gltf.hpp"
+#include "camera.hpp"
 
-struct CheckerboardSampler : Sampler
+using namespace RetroWarp;
+using namespace Granite;
+
+struct TextureSampler : Sampler
 {
 	Texel sample(int u, int v) override
 	{
-		u &= 1;
-		v &= 1;
-		uint8_t res = 255 - (u ^ v) * 255;
-		return { res, res, res, res };
+		if (u < 0)
+			u = 0;
+		if (v < 0)
+			v = 0;
+		if (unsigned(u) >= tex.get_layout().get_width())
+			u = tex.get_layout().get_width() - 1;
+		if (unsigned(v) >= tex.get_layout().get_height())
+			v = tex.get_layout().get_height() - 1;
+
+		auto *res = tex.get_layout().data_2d<u8vec4>(u, v);
+		return { res->x, res->y, res->z, res->w };
 	}
+
+	SceneFormats::MemoryMappedTexture tex;
 };
 
 struct CanvasROP : ROP
@@ -65,45 +81,152 @@ void CanvasROP::fill_alpha_opaque()
 			canvas.get(x, y) |= 0xff000000u;
 }
 
-int main()
+int main(int argc, char **argv)
 {
-	CheckerboardSampler samp;
+	if (argc != 2)
+		return EXIT_FAILURE;
+
+	Global::init(Global::MANAGER_FEATURE_FILESYSTEM_BIT);
+
+	GLTF::Parser parser(argv[1]);
+	auto &scene = parser.get_scenes()[parser.get_default_scene()];
+	auto &node = parser.get_nodes()[scene.node_indices.front()];
+	uint32_t mesh_index = node.meshes.front();
+	auto &mesh = parser.get_meshes()[mesh_index];
+
+	std::vector<Vertex> vertices;
+	std::vector<InputPrimitive> input_primitives;
+
+	unsigned num_vertices = mesh.positions.size() / mesh.position_stride;
+	vertices.resize(num_vertices);
+	auto pos_format = mesh.attribute_layout[Util::ecast(MeshAttribute::Position)].format;
+	auto normal_format = mesh.attribute_layout[Util::ecast(MeshAttribute::Normal)].format;
+	auto normal_offset = mesh.attribute_layout[Util::ecast(MeshAttribute::Normal)].offset;
+
+	for (unsigned i = 0; i < num_vertices; i++)
+	{
+		if (pos_format == VK_FORMAT_R32G32B32_SFLOAT)
+		{
+			memcpy(vertices[i].clip, mesh.positions.data() + i * mesh.position_stride, 3 * sizeof(float));
+			vertices[i].w = 1.0f;
+		}
+		else if (pos_format == VK_FORMAT_R32G32B32A32_SFLOAT)
+			memcpy(vertices[i].clip, mesh.positions.data() + i * mesh.position_stride, 4 * sizeof(float));
+		else
+		{
+			LOGE("Unknown position format.\n");
+			return EXIT_FAILURE;
+		}
+
+		if (normal_format == VK_FORMAT_R32G32B32_SFLOAT)
+		{
+			vec3 n;
+			memcpy(n.data, mesh.attributes.data() + i * mesh.attribute_stride + normal_offset, 3 * sizeof(float));
+			float ndotl = clamp(dot(n, vec3(0.2f, 0.3f, 0.5f)) + 0.1f, 0.0f, 1.0f);
+			for (auto &c : vertices[i].color)
+				c = ndotl;
+		}
+		else
+		{
+			for (auto &c : vertices[i].color)
+				c = 1.0f;
+		}
+	}
+
+	auto &mat = parser.get_materials()[mesh.material_index];
+	TextureSampler sampler;
+	sampler.tex = load_texture_from_file(mat.base_color.path);
+
+	if (mesh.attribute_layout[Util::ecast(MeshAttribute::UV)].format == VK_FORMAT_R32G32_SFLOAT)
+	{
+		auto offset = mesh.attribute_layout[Util::ecast(MeshAttribute::UV)].offset;
+		for (unsigned i = 0; i < num_vertices; i++)
+		{
+			memcpy(&vertices[i].u, mesh.attributes.data() + i * mesh.attribute_stride + offset, sizeof(float));
+			memcpy(&vertices[i].v, mesh.attributes.data() + i * mesh.attribute_stride + offset + sizeof(float), sizeof(float));
+			vertices[i].u = vertices[i].u * float(sampler.tex.get_layout().get_width());
+			vertices[i].v = vertices[i].v * float(sampler.tex.get_layout().get_height());
+		}
+	}
+
+	Camera cam;
+	cam.look_at(vec3(0.0f, 0.05f, 0.08f), vec3(0.0f));
+	cam.set_fovy(0.3f * pi<float>());
+	cam.set_depth_range(0.001f, 1.0f);
+	cam.set_aspect(1280.0f / 720.0f);
+	mat4 mvp = cam.get_projection() * cam.get_view();
+
+	for (unsigned i = 0; i < num_vertices; i++)
+	{
+		vec4 v;
+		memcpy(v.data, vertices[i].clip, sizeof(vec4));
+		v = mvp * v;
+		memcpy(vertices[i].clip, v.data, sizeof(vec4));
+	}
+
+	if (mesh.topology != VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+	{
+		LOGE("Unsupported topology.\n");
+		return EXIT_FAILURE;
+	}
+
+	if (!mesh.indices.empty())
+	{
+		if (mesh.index_type == VK_INDEX_TYPE_UINT16)
+		{
+			auto *indices = reinterpret_cast<const uint16_t *>(mesh.indices.data());
+			for (unsigned i = 0; i < mesh.count; i += 3)
+			{
+				InputPrimitive prim;
+				prim.vertices[0] = vertices[indices[i + 0]];
+				prim.vertices[1] = vertices[indices[i + 1]];
+				prim.vertices[2] = vertices[indices[i + 2]];
+				input_primitives.push_back(prim);
+			}
+		}
+		else if (mesh.index_type == VK_INDEX_TYPE_UINT32)
+		{
+			auto *indices = reinterpret_cast<const uint32_t *>(mesh.indices.data());
+			for (unsigned i = 0; i < mesh.count; i += 3)
+			{
+				InputPrimitive prim;
+				prim.vertices[0] = vertices[indices[i + 0]];
+				prim.vertices[1] = vertices[indices[i + 1]];
+				prim.vertices[2] = vertices[indices[i + 2]];
+				input_primitives.push_back(prim);
+			}
+		}
+	}
+	else
+	{
+		for (unsigned i = 0; i < mesh.count; i += 3)
+		{
+			InputPrimitive prim;
+			prim.vertices[0] = vertices[i + 0];
+			prim.vertices[1] = vertices[i + 1];
+			prim.vertices[2] = vertices[i + 2];
+			input_primitives.push_back(prim);
+		}
+	}
+
 	CanvasROP rop;
 	RasterizerCPU rasterizer;
-	rop.canvas.resize(256, 256);
-	rop.depth_canvas.resize(256, 256);
-	rasterizer.set_scissor(0, 0, 256, 256);
-	rasterizer.set_sampler(&samp);
+	rop.canvas.resize(1920, 1080);
+	rop.depth_canvas.resize(1920, 1080);
+	rasterizer.set_scissor(0, 0, 1920, 1080);
+	rasterizer.set_sampler(&sampler);
 	rasterizer.set_rop(&rop);
 	rop.clear_depth();
 
-	ViewportTransform vp = { 0.0f, 0.0f, 256.0f, 256.0f, 0.0f, 1.0f };
-
-	InputPrimitive prim = {};
-	prim.vertices[0].x = -0.5f;
-	prim.vertices[0].y = -1.0f;
-	prim.vertices[0].z = 1.0f;
-	prim.vertices[0].w = 1.0f;
-
-	prim.vertices[1].x = +0.5f;
-	prim.vertices[1].y = -1.0f;
-	prim.vertices[1].z = 1.0f;
-	prim.vertices[1].w = 1.0f;
-
-	prim.vertices[2].x = 0.0f;
-	prim.vertices[2].y = 0.0f;
-	prim.vertices[2].z = 1.0f;
-	prim.vertices[2].w = 1.0f;
-
-	prim.vertices[0].color[0] = 1.0f;
-	prim.vertices[1].color[1] = 1.0f;
-	prim.vertices[2].color[2] = 1.0f;
-
+	ViewportTransform vp = { 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f };
 	PrimitiveSetup setup[256];
 
-	unsigned count = setup_clipped_triangles(setup, prim, CullMode::None, vp);
-	for (unsigned i = 0; i < count; i++)
-		rasterizer.render_primitive(setup[i]);
+	for (auto &prim : input_primitives)
+	{
+		unsigned count = setup_clipped_triangles(setup, prim, CullMode::CCWOnly, vp);
+		for (unsigned i = 0; i < count; i++)
+			rasterizer.render_primitive(setup[i]);
+	}
 
 	rop.fill_alpha_opaque();
 	rop.save_canvas("/tmp/test.png");

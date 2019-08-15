@@ -36,4 +36,3 @@ target_include_directories(rasterizer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 add_executable(test test.cpp)
 target_compile_options(test PRIVATE ${RETROWARP_CXX_FLAGS})
 target_link_libraries(test PRIVATE rasterizer granite stb)
-

@@ -106,9 +106,12 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 			int v = prim.v + prim.dvdx * dx + prim.dvdy * dy;
 
 			w = std::max(1, w);
-			u = (u << 13) / w;
-			v = (v << 13) / w;
+			w >>= 8;
+			u = u / w;
+			v = v / w;
 
+			u -= 16;
+			v -= 16;
 			int sub_u = u & 31;
 			int sub_v = v & 31;
 			u >>= 5;

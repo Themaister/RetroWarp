@@ -42,10 +42,11 @@ static int32_t quantize_w(float w)
 	return int32_t(rounded);
 }
 
-static int16_t quantize_uv(float v)
+static int32_t quantize_uv(float v)
 {
-	float rounded = std::round(v * float(1 << 8));
-	return clamp_float_int16(rounded);
+	float rounded = std::round(v * float(1 << 13));
+	//return clamp_float_int16(rounded);
+	return int32_t(rounded);
 }
 
 static bool setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input, CullMode cull_mode)

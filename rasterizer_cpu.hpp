@@ -23,9 +23,7 @@ class RasterizerCPU
 {
 public:
 	void render_primitive(const PrimitiveSetup &prim);
-
 	void set_scissor(int x, int y, int width, int height);
-
 	void set_sampler(Sampler *sampler);
 	void set_rop(ROP *rop);
 

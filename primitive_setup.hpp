@@ -20,8 +20,8 @@ struct PrimitiveSetup
 	int32_t x_a, x_b, x_c;
 	int16_t y_lo, y_mid, y_hi;
 
-	int16_t u, dudx, dudy;
-	int16_t v, dvdx, dvdy;
+	int32_t u, dudx, dudy;
+	int32_t v, dvdx, dvdy;
 
 	int32_t dxdy_a, dxdy_b, dxdy_c;
 
