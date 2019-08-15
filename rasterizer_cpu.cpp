@@ -24,6 +24,17 @@ static int clamp_unorm8(int v)
 		return v;
 }
 
+static uint16_t clamp_unorm16(int z)
+{
+	z = (z + 0x800) >> 12;
+	if (z < 0)
+		return 0;
+	else if (z > 0xffff)
+		return 0xffff;
+	else
+		return uint16_t(z);
+}
+
 void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 {
 	fprintf(stderr, "=== START PRIMITIVE ===\n");
@@ -89,7 +100,7 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 			b = clamp_unorm8((b + 32) >> 6);
 			a = clamp_unorm8((a + 32) >> 6);
 
-			int z = prim.z + prim.dzdx * dx + prim.dzdy * dy;
+			uint16_t z = clamp_unorm16(prim.z + prim.dzdx * dx + prim.dzdy * dy);
 			int w = prim.w + prim.dwdx * dx + prim.dwdy * dy;
 			int u = prim.u + prim.dudx * dx + prim.dudy * dy;
 			int v = prim.v + prim.dvdx * dx + prim.dvdy * dy;
@@ -113,7 +124,7 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 			auto tex = filter_linear_vert(tex_0, tex_1, sub_v);
 
 			tex = multiply_unorm8(tex, { uint8_t(r), uint8_t(g), uint8_t(b), uint8_t(a) });
-			rop->emit_pixel(x, y, tex);
+			rop->emit_pixel(x, y, z, tex);
 		}
 	}
 	fprintf(stderr, "=== END PRIMITIVE ===\n\n");

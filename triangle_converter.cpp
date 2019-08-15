@@ -32,7 +32,7 @@ static void quantize_color(int16_t output[4], const float input[4])
 
 static int32_t quantize_z(float z)
 {
-	float rounded = std::round(z * float(1 << 24));
+	float rounded = std::round(z * float(((1 << 16) - 1) << 12));
 	return int32_t(rounded);
 }
 
@@ -355,16 +355,20 @@ static unsigned setup_clipped_triangles_clipped_w(PrimitiveSetup *setup, InputPr
 		prim.vertices[i].u *= iw;
 		prim.vertices[i].v *= iw;
 		prim.vertices[i].w = iw;
+
+		// Apply viewport transform for X/Y.
+		prim.vertices[i].x = vp.x + (0.5f * prim.vertices[i].x + 0.5f) * vp.width;
+		prim.vertices[i].y = vp.y + (0.5f * prim.vertices[i].y + 0.5f) * vp.height;
 	}
 
 	// Clip -X on guard bard.
-	unsigned count = clip_triangles(tmp_a, &prim, 1, 0, -1.0f);
+	unsigned count = clip_triangles(tmp_a, &prim, 1, 0, -2048.0f);
 	// Clip +X on guard band.
-	count = clip_triangles(tmp_b, tmp_a, count, 0, +1.0f);
+	count = clip_triangles(tmp_b, tmp_a, count, 0, +2048.0f);
 	// Clip -Y on guard band.
-	count = clip_triangles(tmp_a, tmp_b, count, 1, -1.0f);
+	count = clip_triangles(tmp_a, tmp_b, count, 1, -2048.0f);
 	// Clip +Y on guard band.
-	count = clip_triangles(tmp_b, tmp_a, count, 1, +1.0f);
+	count = clip_triangles(tmp_b, tmp_a, count, 1, +2048.0f);
 	// Clip near, before viewport transform.
 	count = clip_triangles(tmp_a, tmp_b, count, 2, 0.0f);
 	// Clip far, before viewport transform.
@@ -373,14 +377,11 @@ static unsigned setup_clipped_triangles_clipped_w(PrimitiveSetup *setup, InputPr
 	unsigned output_count = 0;
 	for (unsigned i = 0; i < count; i++)
 	{
-		// Apply viewport transform for Z.
-		auto &prim = tmp_b[i];
+		auto &tmp_prim = tmp_b[i];
 		for (unsigned j = 0; j < 3; j++)
 		{
-			// Apply viewport transform for X/Y.
-			prim.vertices[j].x = vp.x + (0.5f * prim.vertices[j].x + 0.5f) * vp.width;
-			prim.vertices[j].y = vp.y + (0.5f * prim.vertices[j].y + 0.5f) * vp.height;
-			prim.vertices[j].z = vp.min_depth + prim.vertices[j].z * (vp.max_depth - vp.min_depth);
+			// Apply viewport transform for Z.
+			tmp_prim.vertices[j].z = vp.min_depth + tmp_prim.vertices[j].z * (vp.max_depth - vp.min_depth);
 		}
 
 		if (setup_triangle(setup[output_count], tmp_b[i], mode))

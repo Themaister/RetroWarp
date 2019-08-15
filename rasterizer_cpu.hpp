@@ -16,7 +16,7 @@ struct Sampler
 
 struct ROP
 {
-	virtual void emit_pixel(int x, int v, const Texel &texel) = 0;
+	virtual void emit_pixel(int x, int y, uint16_t z, const Texel &texel) = 0;
 };
 
 class RasterizerCPU
