@@ -31,7 +31,8 @@ struct TextureSampler : Sampler
 			v = tex.get_layout().get_height() - 1;
 
 		auto *res = tex.get_layout().data_2d<u8vec4>(u, v);
-		return { res->x, res->y, res->z, res->w };
+		//return { res->x, res->y, res->z, res->w };
+		return { 0xff, 0xff, 0xff, 0xff };
 	}
 
 	SceneFormats::MemoryMappedTexture tex;
@@ -65,6 +66,7 @@ void CanvasROP::emit_pixel(int x, int y, uint16_t z, const Texel &texel)
 	{
 		d = z;
 		v = (uint32_t(texel.r) << 0) | (uint32_t(texel.g) << 8) | (uint32_t(texel.b) << 16) | (uint32_t(texel.a) << 24);
+		//v = ~0u;
 	}
 }
 
@@ -89,29 +91,40 @@ int main(int argc, char **argv)
 	Global::init(Global::MANAGER_FEATURE_FILESYSTEM_BIT);
 
 	GLTF::Parser parser(argv[1]);
-	auto &scene = parser.get_scenes()[parser.get_default_scene()];
-	auto &node = parser.get_nodes()[scene.node_indices.front()];
-	uint32_t mesh_index = node.meshes.front();
-	auto &mesh = parser.get_meshes()[mesh_index];
+	const SceneFormats::Mesh *mesh = nullptr;
+	for (auto &node : parser.get_nodes())
+	{
+		if (!node.meshes.empty())
+		{
+			mesh = &parser.get_meshes()[node.meshes.front()];
+			break;
+		}
+	}
+
+	if (!mesh)
+	{
+		LOGE("No meshes.\n");
+		return EXIT_FAILURE;
+	}
 
 	std::vector<Vertex> vertices;
 	std::vector<InputPrimitive> input_primitives;
 
-	unsigned num_vertices = mesh.positions.size() / mesh.position_stride;
+	unsigned num_vertices = mesh->positions.size() / mesh->position_stride;
 	vertices.resize(num_vertices);
-	auto pos_format = mesh.attribute_layout[Util::ecast(MeshAttribute::Position)].format;
-	auto normal_format = mesh.attribute_layout[Util::ecast(MeshAttribute::Normal)].format;
-	auto normal_offset = mesh.attribute_layout[Util::ecast(MeshAttribute::Normal)].offset;
+	auto pos_format = mesh->attribute_layout[Util::ecast(MeshAttribute::Position)].format;
+	auto normal_format = mesh->attribute_layout[Util::ecast(MeshAttribute::Normal)].format;
+	auto normal_offset = mesh->attribute_layout[Util::ecast(MeshAttribute::Normal)].offset;
 
 	for (unsigned i = 0; i < num_vertices; i++)
 	{
 		if (pos_format == VK_FORMAT_R32G32B32_SFLOAT)
 		{
-			memcpy(vertices[i].clip, mesh.positions.data() + i * mesh.position_stride, 3 * sizeof(float));
+			memcpy(vertices[i].clip, mesh->positions.data() + i * mesh->position_stride, 3 * sizeof(float));
 			vertices[i].w = 1.0f;
 		}
 		else if (pos_format == VK_FORMAT_R32G32B32A32_SFLOAT)
-			memcpy(vertices[i].clip, mesh.positions.data() + i * mesh.position_stride, 4 * sizeof(float));
+			memcpy(vertices[i].clip, mesh->positions.data() + i * mesh->position_stride, 4 * sizeof(float));
 		else
 		{
 			LOGE("Unknown position format.\n");
@@ -121,7 +134,7 @@ int main(int argc, char **argv)
 		if (normal_format == VK_FORMAT_R32G32B32_SFLOAT)
 		{
 			vec3 n;
-			memcpy(n.data, mesh.attributes.data() + i * mesh.attribute_stride + normal_offset, 3 * sizeof(float));
+			memcpy(n.data, mesh->attributes.data() + i * mesh->attribute_stride + normal_offset, 3 * sizeof(float));
 			float ndotl = clamp(dot(n, vec3(0.2f, 0.3f, 0.5f)) + 0.1f, 0.0f, 1.0f);
 			for (auto &c : vertices[i].color)
 				c = ndotl;
@@ -133,26 +146,26 @@ int main(int argc, char **argv)
 		}
 	}
 
-	auto &mat = parser.get_materials()[mesh.material_index];
+	auto &mat = parser.get_materials()[mesh->material_index];
 	TextureSampler sampler;
 	sampler.tex = load_texture_from_file(mat.base_color.path);
 
-	if (mesh.attribute_layout[Util::ecast(MeshAttribute::UV)].format == VK_FORMAT_R32G32_SFLOAT)
+	if (mesh->attribute_layout[Util::ecast(MeshAttribute::UV)].format == VK_FORMAT_R32G32_SFLOAT)
 	{
-		auto offset = mesh.attribute_layout[Util::ecast(MeshAttribute::UV)].offset;
+		auto offset = mesh->attribute_layout[Util::ecast(MeshAttribute::UV)].offset;
 		for (unsigned i = 0; i < num_vertices; i++)
 		{
-			memcpy(&vertices[i].u, mesh.attributes.data() + i * mesh.attribute_stride + offset, sizeof(float));
-			memcpy(&vertices[i].v, mesh.attributes.data() + i * mesh.attribute_stride + offset + sizeof(float), sizeof(float));
+			memcpy(&vertices[i].u, mesh->attributes.data() + i * mesh->attribute_stride + offset, sizeof(float));
+			memcpy(&vertices[i].v, mesh->attributes.data() + i * mesh->attribute_stride + offset + sizeof(float), sizeof(float));
 			vertices[i].u = vertices[i].u * float(sampler.tex.get_layout().get_width());
 			vertices[i].v = vertices[i].v * float(sampler.tex.get_layout().get_height());
 		}
 	}
 
 	Camera cam;
-	cam.look_at(vec3(0.0f, 0.05f, 0.08f), vec3(0.0f));
-	cam.set_fovy(0.3f * pi<float>());
-	cam.set_depth_range(0.001f, 1.0f);
+	cam.look_at(vec3(0.0f, 0.0f, 4.0f), vec3(0.0f));
+	cam.set_fovy(0.6f * pi<float>());
+	cam.set_depth_range(0.1f, 100.0f);
 	cam.set_aspect(1280.0f / 720.0f);
 	mat4 mvp = cam.get_projection() * cam.get_view();
 
@@ -164,18 +177,18 @@ int main(int argc, char **argv)
 		memcpy(vertices[i].clip, v.data, sizeof(vec4));
 	}
 
-	if (mesh.topology != VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+	if (mesh->topology != VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
 	{
 		LOGE("Unsupported topology.\n");
 		return EXIT_FAILURE;
 	}
 
-	if (!mesh.indices.empty())
+	if (!mesh->indices.empty())
 	{
-		if (mesh.index_type == VK_INDEX_TYPE_UINT16)
+		if (mesh->index_type == VK_INDEX_TYPE_UINT16)
 		{
-			auto *indices = reinterpret_cast<const uint16_t *>(mesh.indices.data());
-			for (unsigned i = 0; i < mesh.count; i += 3)
+			auto *indices = reinterpret_cast<const uint16_t *>(mesh->indices.data());
+			for (unsigned i = 0; i < mesh->count; i += 3)
 			{
 				InputPrimitive prim;
 				prim.vertices[0] = vertices[indices[i + 0]];
@@ -184,10 +197,10 @@ int main(int argc, char **argv)
 				input_primitives.push_back(prim);
 			}
 		}
-		else if (mesh.index_type == VK_INDEX_TYPE_UINT32)
+		else if (mesh->index_type == VK_INDEX_TYPE_UINT32)
 		{
-			auto *indices = reinterpret_cast<const uint32_t *>(mesh.indices.data());
-			for (unsigned i = 0; i < mesh.count; i += 3)
+			auto *indices = reinterpret_cast<const uint32_t *>(mesh->indices.data());
+			for (unsigned i = 0; i < mesh->count; i += 3)
 			{
 				InputPrimitive prim;
 				prim.vertices[0] = vertices[indices[i + 0]];
@@ -199,7 +212,7 @@ int main(int argc, char **argv)
 	}
 	else
 	{
-		for (unsigned i = 0; i < mesh.count; i += 3)
+		for (unsigned i = 0; i < mesh->count; i += 3)
 		{
 			InputPrimitive prim;
 			prim.vertices[0] = vertices[i + 0];
@@ -211,18 +224,19 @@ int main(int argc, char **argv)
 
 	CanvasROP rop;
 	RasterizerCPU rasterizer;
-	rop.canvas.resize(1920, 1080);
-	rop.depth_canvas.resize(1920, 1080);
-	rasterizer.set_scissor(0, 0, 1920, 1080);
+	rop.canvas.resize(1280, 720);
+	rop.depth_canvas.resize(1280, 720);
+	rasterizer.set_scissor(0, 0, 1280, 720);
 	rasterizer.set_sampler(&sampler);
 	rasterizer.set_rop(&rop);
 	rop.clear_depth();
 
-	ViewportTransform vp = { 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f };
+	ViewportTransform vp = { 0.0f, 0.0f, 1280.0f, 720.0f, 0.0f, 1.0f };
 	PrimitiveSetup setup[256];
 
 	for (auto &prim : input_primitives)
 	{
+		unsigned prim_index = unsigned(&prim - input_primitives.data());
 		unsigned count = setup_clipped_triangles(setup, prim, CullMode::CCWOnly, vp);
 		for (unsigned i = 0; i < count; i++)
 			rasterizer.render_primitive(setup[i]);

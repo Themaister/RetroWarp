@@ -41,8 +41,7 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 
 	// Interpolation of UV, Z, W and Color are all based off the floored integer coordinate.
 	int interpolation_base_x = prim.x_a >> (16 + SUBPIXELS_LOG2);
-	int interpolation_base_ylo = prim.y_lo >> SUBPIXELS_LOG2;
-	int interpolation_base_ymid = prim.y_mid >> SUBPIXELS_LOG2;
+	int interpolation_base_y = prim.y_lo >> SUBPIXELS_LOG2;
 
 	int span_begin_y = (prim.y_lo + ((1 << SUBPIXELS_LOG2) - 1)) >> SUBPIXELS_LOG2;
 	int span_end_y = (prim.y_hi - 1) >> SUBPIXELS_LOG2;
@@ -55,11 +54,12 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 
 	for (int y = span_begin_y; y <= span_end_y; y++)
 	{
+		int y_sub = y << SUBPIXELS_LOG2;
 		// Need to interpolate at high resolution,
 		// since dxdy requires a very good resolution to resolve near vertical lines.
-		int x_a = prim.x_a + prim.dxdy_a * ((y - interpolation_base_ylo) << SUBPIXELS_LOG2);
-		int x_b = prim.x_b + prim.dxdy_b * ((y - interpolation_base_ylo) << SUBPIXELS_LOG2);
-		int x_c = prim.x_c + prim.dxdy_c * ((y - interpolation_base_ymid) << SUBPIXELS_LOG2);
+		int x_a = prim.x_a + prim.dxdy_a * (y_sub - prim.y_lo);
+		int x_b = prim.x_b + prim.dxdy_b * (y_sub - prim.y_lo);
+		int x_c = prim.x_c + prim.dxdy_c * (y_sub - prim.y_mid);
 
 		// The secondary span edge is split into two edges.
 		bool select_hi = (y << SUBPIXELS_LOG2) >= prim.y_mid;
@@ -84,7 +84,7 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 			end_x = scissor.x + scissor.width - 1;
 
 		// We've passed the rasterization test. Interpolate colors, Z, 1/W.
-		int dy = y - interpolation_base_ylo;
+		int dy = y - interpolation_base_y;
 
 		for (int x = start_x; x <= end_x; x++)
 		{
@@ -95,18 +95,18 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 			int b = int(prim.color[2]) + int(prim.dcolor_dx[2]) * dx + int(prim.dcolor_dy[2]) * dy;
 			int a = int(prim.color[3]) + int(prim.dcolor_dx[3]) * dx + int(prim.dcolor_dy[3]) * dy;
 
-			r = clamp_unorm8((r + 32) >> 6);
-			g = clamp_unorm8((g + 32) >> 6);
-			b = clamp_unorm8((b + 32) >> 6);
-			a = clamp_unorm8((a + 32) >> 6);
+			r = clamp_unorm8((r + 0x8000) >> 16);
+			g = clamp_unorm8((g + 0x8000) >> 16);
+			b = clamp_unorm8((b + 0x8000) >> 16);
+			a = clamp_unorm8((a + 0x8000) >> 16);
 
 			uint16_t z = clamp_unorm16(prim.z + prim.dzdx * dx + prim.dzdy * dy);
 			int w = prim.w + prim.dwdx * dx + prim.dwdy * dy;
 			int u = prim.u + prim.dudx * dx + prim.dudy * dy;
 			int v = prim.v + prim.dvdx * dx + prim.dvdy * dy;
 
-			w = std::max(1, w);
 			w >>= 8;
+			w = std::max(1, w);
 			u = u / w;
 			v = v / w;
 

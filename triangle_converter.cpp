@@ -1,7 +1,8 @@
 #include "triangle_converter.hpp"
 #include <utility>
-#include <cmath>
 #include <algorithm>
+#include <cmath>
+#include <assert.h>
 
 namespace RetroWarp
 {
@@ -21,32 +22,47 @@ static int16_t quantize_xy(float x)
 	return clamp_float_int16(std::round(x));
 }
 
-static void quantize_color(int16_t output[4], const float input[4])
+static void quantize_color(int32_t output[4], const float input[4])
 {
 	for (int i = 0; i < 4; i++)
 	{
-		float rounded = std::round(input[i] * 255.0f * 64.0f);
-		output[i] = clamp_float_int16(rounded);
+		float rounded = std::round(input[i] * 255.0f * float(0x10000));
+		assert(rounded <= float(std::numeric_limits<int32_t>::max()));
+		//output[i] = clamp_float_int16(rounded);
+		output[i] = int32_t(rounded);
 	}
 }
 
 static int32_t quantize_z(float z)
 {
 	float rounded = std::round(z * float(((1 << 16) - 1) << 12));
+	assert(rounded <= float(std::numeric_limits<int32_t>::max()));
 	return int32_t(rounded);
 }
 
 static int32_t quantize_w(float w)
 {
 	float rounded = std::round(w * float(1 << 16));
+	assert(rounded <= float(std::numeric_limits<int32_t>::max()));
 	return int32_t(rounded);
 }
 
 static int32_t quantize_uv(float v)
 {
 	float rounded = std::round(v * float(1 << 13));
-	//return clamp_float_int16(rounded);
+	assert(rounded <= float(std::numeric_limits<int32_t>::max()));
 	return int32_t(rounded);
+}
+
+static int32_t round_away_from_zero_divide(int32_t x, int32_t y)
+{
+	int32_t rounding = y - 1;
+	if (x < 0)
+		x -= rounding;
+	else if (x > 0)
+		x += rounding;
+
+	return x / y;
 }
 
 static bool setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input, CullMode cull_mode)
@@ -61,12 +77,20 @@ static bool setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input, C
 	int index_b = 1;
 	int index_c = 2;
 
-	// Sort primitives by height.
+	// Sort primitives by height, tie break by sorting on X.
 	if (ys[index_b] < ys[index_a])
 		std::swap(index_b, index_a);
+	else if (ys[index_b] == ys[index_a] && xs[index_b] < xs[index_a])
+		std::swap(index_b, index_a);
+
 	if (ys[index_c] < ys[index_b])
 		std::swap(index_c, index_b);
+	else if (ys[index_c] == ys[index_b] && xs[index_c] < xs[index_b])
+		std::swap(index_c, index_b);
+
 	if (ys[index_b] < ys[index_a])
+		std::swap(index_b, index_a);
+	else if (ys[index_b] == ys[index_a] && xs[index_b] < xs[index_a])
 		std::swap(index_b, index_a);
 
 	int16_t y_lo = ys[index_a];
@@ -86,10 +110,9 @@ static bool setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input, C
 	setup.y_hi = y_hi;
 
 	// Compute slopes.
-	// Can only shift by 15 here since subtraction adds another bit of range.
-	setup.dxdy_a = ((x_c - x_a) << 15) / std::max(1 << SUBPIXELS_LOG2, (y_hi - y_lo) >> 1);
-	setup.dxdy_b = ((x_b - x_a) << 15) / std::max(1 << SUBPIXELS_LOG2, (y_mid - y_lo) >> 1);
-	setup.dxdy_c = ((x_c - x_b) << 15) / std::max(1 << SUBPIXELS_LOG2, (y_hi - y_mid) >> 1);
+	setup.dxdy_a = round_away_from_zero_divide((x_c - x_a) << 16, std::max(1, y_hi - y_lo));
+	setup.dxdy_b = round_away_from_zero_divide((x_b - x_a) << 16, std::max(1, y_mid - y_lo));
+	setup.dxdy_c = round_away_from_zero_divide((x_c - x_b) << 16, std::max(1, y_hi - y_mid));
 
 	if (setup.dxdy_b < setup.dxdy_a)
 		setup.flags |= PRIMITIVE_RIGHT_MAJOR_BIT;
@@ -119,16 +142,13 @@ static bool setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input, C
 
 	for (int c = 0; c < 4; c++)
 	{
-		dcolor_dx[c] = -(ab_y * input.vertices[2].color[c] +
-		                 ca_y * input.vertices[1].color[c] +
-		                 bc_y * input.vertices[0].color[c]);
+		dcolor_dx[c] = -inv_signed_area * (ab_y * input.vertices[2].color[c] +
+		                                   ca_y * input.vertices[1].color[c] +
+		                                   bc_y * input.vertices[0].color[c]);
 
-		dcolor_dy[c] = ab_x * input.vertices[2].color[c] +
-		               ca_x * input.vertices[1].color[c] +
-		               bc_x * input.vertices[0].color[c];
-
-		dcolor_dx[c] *= inv_signed_area;
-		dcolor_dy[c] *= inv_signed_area;
+		dcolor_dy[c] = inv_signed_area * (ab_x * input.vertices[2].color[c] +
+		                                  ca_x * input.vertices[1].color[c] +
+		                                  bc_x * input.vertices[0].color[c]);
 	}
 
 	quantize_color(setup.dcolor_dx, dcolor_dx);
@@ -186,10 +206,6 @@ static bool setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input, C
 	int y_subpel_offset_mid = y_mid & ((1 << SUBPIXELS_LOG2) - 1);
 
 	// Adjust interpolants for sub-pixel precision.
-	setup.x_a -= setup.dxdy_a * y_subpel_offset_lo;
-	setup.x_b -= setup.dxdy_b * y_subpel_offset_lo;
-	setup.x_c -= setup.dxdy_c * y_subpel_offset_mid;
-
 	for (int c = 0; c < 4; c++)
 		setup.color[c] -= (setup.dcolor_dx[c] >> SUBPIXELS_LOG2) * x_subpel_offset + (setup.dcolor_dy[c] >> SUBPIXELS_LOG2) * y_subpel_offset_lo;
 
@@ -365,11 +381,11 @@ static unsigned setup_clipped_triangles_clipped_w(PrimitiveSetup *setup, InputPr
 	// Clip -X on guard bard.
 	unsigned count = clip_triangles(tmp_a, &prim, 1, 0, -2048.0f);
 	// Clip +X on guard band.
-	count = clip_triangles(tmp_b, tmp_a, count, 0, +2048.0f);
+	count = clip_triangles(tmp_b, tmp_a, count, 0, +2047.0f);
 	// Clip -Y on guard band.
 	count = clip_triangles(tmp_a, tmp_b, count, 1, -2048.0f);
 	// Clip +Y on guard band.
-	count = clip_triangles(tmp_b, tmp_a, count, 1, +2048.0f);
+	count = clip_triangles(tmp_b, tmp_a, count, 1, +2047.0f);
 	// Clip near, before viewport transform.
 	count = clip_triangles(tmp_a, tmp_b, count, 2, 0.0f);
 	// Clip far, before viewport transform.
