@@ -62,19 +62,30 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 		int x_c = prim.x_c + prim.dxdy_c * (y_sub - prim.y_mid);
 
 		// The secondary span edge is split into two edges.
-		bool select_hi = (y << SUBPIXELS_LOG2) >= prim.y_mid;
+		bool select_hi = y_sub >= prim.y_mid;
 		int primary_x = x_a;
 		int secondary_x = select_hi ? x_c : x_b;
 
+		int start_x, end_x;
 		// Preserve 3 sub-pixels, X is now 13.3.
-		primary_x >>= 16;
-		secondary_x >>= 16;
-		if (prim.flags & PRIMITIVE_RIGHT_MAJOR_BIT)
-			std::swap(primary_x, secondary_x);
-
+		//primary_x = (primary_x + 0x8000) >> 16;
+		//secondary_x = (secondary_x + 0x8000) >> 16;
+		//if (prim.flags & PRIMITIVE_RIGHT_MAJOR_BIT)
+		//	std::swap(primary_x, secondary_x);
 		// Compute the span for this scanline.
-		int start_x = (primary_x + ((1 << SUBPIXELS_LOG2) - 1)) >> SUBPIXELS_LOG2;
-		int end_x = (secondary_x - 1) >> SUBPIXELS_LOG2;
+		//int start_x = (primary_x + ((1 << SUBPIXELS_LOG2) - 1)) >> SUBPIXELS_LOG2;
+		//int end_x = (secondary_x - 1) >> SUBPIXELS_LOG2;
+
+		if (prim.flags & PRIMITIVE_RIGHT_MAJOR_BIT)
+		{
+			start_x = (secondary_x + 0x7ffff) >> (16 + SUBPIXELS_LOG2);
+			end_x = (primary_x - 1) >> (16 + SUBPIXELS_LOG2);
+		}
+		else
+		{
+			start_x = (primary_x + 0x7ffff) >> (16 + SUBPIXELS_LOG2);
+			end_x = (secondary_x - 1) >> (16 + SUBPIXELS_LOG2);
+		}
 
 		fprintf(stderr, "  Y: %d: [%d, %d]\n", y, start_x, end_x);
 
@@ -84,21 +95,25 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 			end_x = scissor.x + scissor.width - 1;
 
 		// We've passed the rasterization test. Interpolate colors, Z, 1/W.
-		int dy = y - interpolation_base_y;
+		int dy = (y - interpolation_base_y) << SUBPIXELS_LOG2;
 
 		for (int x = start_x; x <= end_x; x++)
 		{
-			int dx = x - interpolation_base_x;
+			int dx = (x - interpolation_base_x) << SUBPIXELS_LOG2;
 
 			int r = int(prim.color[0]) + int(prim.dcolor_dx[0]) * dx + int(prim.dcolor_dy[0]) * dy;
 			int g = int(prim.color[1]) + int(prim.dcolor_dx[1]) * dx + int(prim.dcolor_dy[1]) * dy;
 			int b = int(prim.color[2]) + int(prim.dcolor_dx[2]) * dx + int(prim.dcolor_dy[2]) * dy;
 			int a = int(prim.color[3]) + int(prim.dcolor_dx[3]) * dx + int(prim.dcolor_dy[3]) * dy;
 
-			r = clamp_unorm8((r + 0x8000) >> 16);
-			g = clamp_unorm8((g + 0x8000) >> 16);
-			b = clamp_unorm8((b + 0x8000) >> 16);
-			a = clamp_unorm8((a + 0x8000) >> 16);
+			r = clamp_unorm8((r + 0x800) >> 12);
+			g = clamp_unorm8((g + 0x800) >> 12);
+			b = clamp_unorm8((b + 0x800) >> 12);
+			a = clamp_unorm8((a + 0x800) >> 12);
+			r = 0xff;
+			g = 0xff;
+			b = 0xff;
+			a = 0xff;
 
 			uint16_t z = clamp_unorm16(prim.z + prim.dzdx * dx + prim.dzdy * dy);
 			int w = prim.w + prim.dwdx * dx + prim.dwdy * dy;
@@ -107,8 +122,8 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 
 			w >>= 8;
 			w = std::max(1, w);
-			u = u / w;
-			v = v / w;
+			u = (u + (w >> 1)) / w;
+			v = (v + (w >> 1)) / w;
 
 			u -= 16;
 			v -= 16;

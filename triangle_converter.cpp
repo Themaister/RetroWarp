@@ -26,7 +26,7 @@ static void quantize_color(int32_t output[4], const float input[4])
 {
 	for (int i = 0; i < 4; i++)
 	{
-		float rounded = std::round(input[i] * 255.0f * float(0x10000));
+		float rounded = std::round(input[i] * 255.0f * float(0x1000));
 		assert(rounded <= float(std::numeric_limits<int32_t>::max()));
 		//output[i] = clamp_float_int16(rounded);
 		output[i] = int32_t(rounded);
@@ -136,7 +136,7 @@ static bool setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input, C
 	else if (cull_mode == CullMode::CWOnly && signed_area < 0)
 		return false;
 
-	float inv_signed_area = float(1 << SUBPIXELS_LOG2) / float(signed_area);
+	float inv_signed_area = 1.0f / float(signed_area);
 	float dcolor_dx[4];
 	float dcolor_dy[4];
 
@@ -203,16 +203,15 @@ static bool setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input, C
 	// Interpolations are based on the integer coordinate of the top vertex.
 	int x_subpel_offset = x_a & ((1 << SUBPIXELS_LOG2) - 1);
 	int y_subpel_offset_lo = y_lo & ((1 << SUBPIXELS_LOG2) - 1);
-	int y_subpel_offset_mid = y_mid & ((1 << SUBPIXELS_LOG2) - 1);
 
 	// Adjust interpolants for sub-pixel precision.
 	for (int c = 0; c < 4; c++)
-		setup.color[c] -= (setup.dcolor_dx[c] >> SUBPIXELS_LOG2) * x_subpel_offset + (setup.dcolor_dy[c] >> SUBPIXELS_LOG2) * y_subpel_offset_lo;
+		setup.color[c] -= setup.dcolor_dx[c] * x_subpel_offset + setup.dcolor_dy[c] * y_subpel_offset_lo;
 
-	setup.z -= (setup.dzdx >> SUBPIXELS_LOG2) * x_subpel_offset + (setup.dzdy >> SUBPIXELS_LOG2) * y_subpel_offset_lo;
-	setup.w -= (setup.dwdx >> SUBPIXELS_LOG2) * x_subpel_offset + (setup.dwdy >> SUBPIXELS_LOG2) * y_subpel_offset_lo;
-	setup.u -= (setup.dudx >> SUBPIXELS_LOG2) * x_subpel_offset + (setup.dudy >> SUBPIXELS_LOG2) * y_subpel_offset_lo;
-	setup.v -= (setup.dvdx >> SUBPIXELS_LOG2) * x_subpel_offset + (setup.dvdy >> SUBPIXELS_LOG2) * y_subpel_offset_lo;
+	setup.z -= setup.dzdx * x_subpel_offset + setup.dzdy * y_subpel_offset_lo;
+	setup.w -= setup.dwdx * x_subpel_offset + setup.dwdy * y_subpel_offset_lo;
+	setup.u -= setup.dudx * x_subpel_offset + setup.dudy * y_subpel_offset_lo;
+	setup.v -= setup.dvdx * x_subpel_offset + setup.dvdy * y_subpel_offset_lo;
 
 	return true;
 }

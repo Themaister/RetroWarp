@@ -31,8 +31,7 @@ struct TextureSampler : Sampler
 			v = tex.get_layout().get_height() - 1;
 
 		auto *res = tex.get_layout().data_2d<u8vec4>(u, v);
-		//return { res->x, res->y, res->z, res->w };
-		return { 0xff, 0xff, 0xff, 0xff };
+		return { res->x, res->y, res->z, res->w };
 	}
 
 	SceneFormats::MemoryMappedTexture tex;
@@ -66,7 +65,6 @@ void CanvasROP::emit_pixel(int x, int y, uint16_t z, const Texel &texel)
 	{
 		d = z;
 		v = (uint32_t(texel.r) << 0) | (uint32_t(texel.g) << 8) | (uint32_t(texel.b) << 16) | (uint32_t(texel.a) << 24);
-		//v = ~0u;
 	}
 }
 
@@ -164,7 +162,7 @@ int main(int argc, char **argv)
 
 	Camera cam;
 	cam.look_at(vec3(0.0f, 0.0f, 4.0f), vec3(0.0f));
-	cam.set_fovy(0.6f * pi<float>());
+	cam.set_fovy(0.3f * pi<float>());
 	cam.set_depth_range(0.1f, 100.0f);
 	cam.set_aspect(1280.0f / 720.0f);
 	mat4 mvp = cam.get_projection() * cam.get_view();
@@ -236,7 +234,7 @@ int main(int argc, char **argv)
 
 	for (auto &prim : input_primitives)
 	{
-		unsigned prim_index = unsigned(&prim - input_primitives.data());
+		//unsigned prim_index = unsigned(&prim - input_primitives.data());
 		unsigned count = setup_clipped_triangles(setup, prim, CullMode::CCWOnly, vp);
 		for (unsigned i = 0; i < count; i++)
 			rasterizer.render_primitive(setup[i]);
