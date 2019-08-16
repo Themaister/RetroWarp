@@ -76,14 +76,16 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 		//int start_x = (primary_x + ((1 << SUBPIXELS_LOG2) - 1)) >> SUBPIXELS_LOG2;
 		//int end_x = (secondary_x - 1) >> SUBPIXELS_LOG2;
 
+		constexpr int raster_rounding = (1 << (SUBPIXELS_LOG2 + 16)) - 1;
+
 		if (prim.flags & PRIMITIVE_RIGHT_MAJOR_BIT)
 		{
-			start_x = (secondary_x + 0x7ffff) >> (16 + SUBPIXELS_LOG2);
+			start_x = (secondary_x + raster_rounding) >> (16 + SUBPIXELS_LOG2);
 			end_x = (primary_x - 1) >> (16 + SUBPIXELS_LOG2);
 		}
 		else
 		{
-			start_x = (primary_x + 0x7ffff) >> (16 + SUBPIXELS_LOG2);
+			start_x = (primary_x + raster_rounding) >> (16 + SUBPIXELS_LOG2);
 			end_x = (secondary_x - 1) >> (16 + SUBPIXELS_LOG2);
 		}
 
