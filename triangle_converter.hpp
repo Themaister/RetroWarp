@@ -26,6 +26,8 @@ struct Vertex
 struct InputPrimitive
 {
 	Vertex vertices[3];
+	int16_t u_offset;
+	int16_t v_offset;
 };
 
 enum class CullMode

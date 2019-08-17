@@ -38,7 +38,7 @@ static uint16_t clamp_unorm16(int z)
 
 static int wrap_uv(int32_t coord)
 {
-	return int32_t((uint32_t(coord) << 11) >> 11);
+	return int32_t(uint32_t(coord) << 11) >> 11;
 }
 
 void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
@@ -129,6 +129,9 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 			int sub_v = perspective_v & 31;
 			perspective_u >>= 5;
 			perspective_v >>= 5;
+
+			perspective_u += prim.u_offset;
+			perspective_v += prim.v_offset;
 
 			auto tex_00 = sampler->sample(perspective_u, perspective_v);
 			auto tex_10 = sampler->sample(perspective_u + 1, perspective_v);

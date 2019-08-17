@@ -21,6 +21,8 @@ struct PrimitiveSetup
 
 	int32_t u, dudx, dudy;
 	int32_t v, dvdx, dvdy;
+	int16_t u_offset;
+	int16_t v_offset;
 
 	int32_t dxdy_a, dxdy_b, dxdy_c;
 

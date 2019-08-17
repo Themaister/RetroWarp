@@ -200,6 +200,9 @@ static bool setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input, C
 
 	setup.flags |= PRIMITIVE_PERSPECTIVE_CORRECT_BIT;
 
+	setup.u_offset = input.u_offset;
+	setup.v_offset = input.v_offset;
+
 	return true;
 }
 
@@ -250,6 +253,8 @@ static void clip_single_output(InputPrimitive &output, const InputPrimitive &inp
 	output.vertices[a].clip[component] = target;
 	output.vertices[b].clip[component] = target;
 	output.vertices[c] = input.vertices[c];
+	output.u_offset = input.u_offset;
+	output.v_offset = input.v_offset;
 }
 
 static void clip_dual_output(InputPrimitive *output, const InputPrimitive &input, unsigned component, float target,
@@ -273,6 +278,11 @@ static void clip_dual_output(InputPrimitive *output, const InputPrimitive &input
 	output[1].vertices[0] = ac;
 	output[1].vertices[1] = input.vertices[b];
 	output[1].vertices[2] = input.vertices[c];
+
+	output[0].u_offset = input.u_offset;
+	output[1].u_offset = input.u_offset;
+	output[0].v_offset = input.v_offset;
+	output[1].v_offset = input.v_offset;
 }
 
 static unsigned clip_component(InputPrimitive *prims, const InputPrimitive &prim, unsigned component,
@@ -359,7 +369,11 @@ static unsigned setup_clipped_triangles_clipped_w(PrimitiveSetup *setup, InputPr
 	for (auto w : ws)
 		min_w = std::min(min_w, w);
 
-	//min_w = 1.0f;
+	// Try to center UV coordinates close to 0 for better division precision.
+	float u_offset = floorf((1.0f / 3.0f) * (prim.vertices[0].u + prim.vertices[1].u + prim.vertices[2].u));
+	float v_offset = floorf((1.0f / 3.0f) * (prim.vertices[0].v + prim.vertices[1].v + prim.vertices[2].v));
+	prim.u_offset = int16_t(u_offset);
+	prim.v_offset = int16_t(v_offset);
 
 	for (unsigned i = 0; i < 3; i++)
 	{
@@ -371,8 +385,8 @@ static unsigned setup_clipped_triangles_clipped_w(PrimitiveSetup *setup, InputPr
 		// Rescale inverse W for improved interpolation accuracy.
 		// 1/w is now scaled to be maximum 1.
 		iw *= min_w;
-		prim.vertices[i].u *= iw;
-		prim.vertices[i].v *= iw;
+		prim.vertices[i].u = (prim.vertices[i].u - u_offset) * iw;
+		prim.vertices[i].v = (prim.vertices[i].v - v_offset) * iw;
 		prim.vertices[i].w = iw;
 
 		// Apply viewport transform for X/Y.
