@@ -10,7 +10,7 @@ static int16_t clamp_float_int16(float v)
 {
 	if (v < float(-0x8000))
 		return -0x8000;
-	else if (v > 0x7fff)
+	else if (v > float(0x7fff))
 		return 0x7fff;
 	else
 		return int16_t(v);
@@ -26,7 +26,7 @@ static void quantize_color(int32_t output[4], const float input[4])
 {
 	for (int i = 0; i < 4; i++)
 	{
-		float rounded = std::round(input[i] * 255.0f * float(0x1000));
+		float rounded = std::round(input[i] * 255.0f * float(0x100));
 		assert(rounded <= float(std::numeric_limits<int32_t>::max()));
 		//output[i] = clamp_float_int16(rounded);
 		output[i] = int32_t(rounded);
@@ -35,7 +35,7 @@ static void quantize_color(int32_t output[4], const float input[4])
 
 static int32_t quantize_z(float z)
 {
-	float rounded = std::round(z * float(((1 << 16) - 1) << 12));
+	float rounded = std::round(z * float(((1 << 16) - 1) << 8));
 	assert(rounded <= float(std::numeric_limits<int32_t>::max()));
 	return int32_t(rounded);
 }
@@ -200,19 +200,6 @@ static bool setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input, C
 
 	setup.flags |= PRIMITIVE_PERSPECTIVE_CORRECT_BIT;
 
-	// Interpolations are based on the integer coordinate of the top vertex.
-	int x_subpel_offset = x_a & ((1 << SUBPIXELS_LOG2) - 1);
-	int y_subpel_offset_lo = y_lo & ((1 << SUBPIXELS_LOG2) - 1);
-
-	// Adjust interpolants for sub-pixel precision.
-	for (int c = 0; c < 4; c++)
-		setup.color[c] -= setup.dcolor_dx[c] * x_subpel_offset + setup.dcolor_dy[c] * y_subpel_offset_lo;
-
-	setup.z -= setup.dzdx * x_subpel_offset + setup.dzdy * y_subpel_offset_lo;
-	setup.w -= setup.dwdx * x_subpel_offset + setup.dwdy * y_subpel_offset_lo;
-	setup.u -= setup.dudx * x_subpel_offset + setup.dudy * y_subpel_offset_lo;
-	setup.v -= setup.dvdx * x_subpel_offset + setup.dvdy * y_subpel_offset_lo;
-
 	return true;
 }
 
@@ -362,12 +349,26 @@ static unsigned setup_clipped_triangles_clipped_w(PrimitiveSetup *setup, InputPr
 	InputPrimitive tmp_a[256];
 	InputPrimitive tmp_b[256];
 
+	const float ws[3] = {
+		prim.vertices[0].w,
+		prim.vertices[1].w,
+		prim.vertices[2].w,
+	};
+
+	float min_w = std::numeric_limits<float>::max();
+	for (auto w : ws)
+		min_w = std::min(min_w, w);
+
 	for (unsigned i = 0; i < 3; i++)
 	{
 		float iw = 1.0f / prim.vertices[i].w;
 		prim.vertices[i].x *= iw;
 		prim.vertices[i].y *= iw;
 		prim.vertices[i].z *= iw;
+
+		// Rescale inverse W for improved interpolation accuracy.
+		// 1/w is now scaled to be maximum 1.
+		iw *= min_w;
 		prim.vertices[i].u *= iw;
 		prim.vertices[i].v *= iw;
 		prim.vertices[i].w = iw;

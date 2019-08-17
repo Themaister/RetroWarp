@@ -26,7 +26,7 @@ static int clamp_unorm8(int v)
 
 static uint16_t clamp_unorm16(int z)
 {
-	z = (z + 0x800) >> 12;
+	z = (z + 0x80) >> 8;
 	if (z < 0)
 		return 0;
 	else if (z > 0xffff)
@@ -40,8 +40,8 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 	fprintf(stderr, "=== START PRIMITIVE ===\n");
 
 	// Interpolation of UV, Z, W and Color are all based off the floored integer coordinate.
-	int interpolation_base_x = prim.x_a >> (16 + SUBPIXELS_LOG2);
-	int interpolation_base_y = prim.y_lo >> SUBPIXELS_LOG2;
+	int interpolation_base_x = prim.x_a >> 16;
+	int interpolation_base_y = prim.y_lo;
 
 	int span_begin_y = (prim.y_lo + ((1 << SUBPIXELS_LOG2) - 1)) >> SUBPIXELS_LOG2;
 	int span_end_y = (prim.y_hi - 1) >> SUBPIXELS_LOG2;
@@ -97,32 +97,30 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 			end_x = scissor.x + scissor.width - 1;
 
 		// We've passed the rasterization test. Interpolate colors, Z, 1/W.
-		int dy = (y - interpolation_base_y) << SUBPIXELS_LOG2;
+		int dy = y_sub - interpolation_base_y;
 
 		for (int x = start_x; x <= end_x; x++)
 		{
-			int dx = (x - interpolation_base_x) << SUBPIXELS_LOG2;
+			int dx = (x << SUBPIXELS_LOG2) - interpolation_base_x;
 
-			int r = int(prim.color[0]) + int(prim.dcolor_dx[0]) * dx + int(prim.dcolor_dy[0]) * dy;
-			int g = int(prim.color[1]) + int(prim.dcolor_dx[1]) * dx + int(prim.dcolor_dy[1]) * dy;
-			int b = int(prim.color[2]) + int(prim.dcolor_dx[2]) * dx + int(prim.dcolor_dy[2]) * dy;
-			int a = int(prim.color[3]) + int(prim.dcolor_dx[3]) * dx + int(prim.dcolor_dy[3]) * dy;
+			int r = prim.color[0] + prim.dcolor_dx[0] * dx + prim.dcolor_dy[0] * dy;
+			int g = prim.color[1] + prim.dcolor_dx[1] * dx + prim.dcolor_dy[1] * dy;
+			int b = prim.color[2] + prim.dcolor_dx[2] * dx + prim.dcolor_dy[2] * dy;
+			int a = prim.color[3] + prim.dcolor_dx[3] * dx + prim.dcolor_dy[3] * dy;
 
-			r = clamp_unorm8((r + 0x800) >> 12);
-			g = clamp_unorm8((g + 0x800) >> 12);
-			b = clamp_unorm8((b + 0x800) >> 12);
-			a = clamp_unorm8((a + 0x800) >> 12);
-			r = 0xff;
-			g = 0xff;
-			b = 0xff;
-			a = 0xff;
+			r = clamp_unorm8((r + 0x80) >> 8);
+			g = clamp_unorm8((g + 0x80) >> 8);
+			b = clamp_unorm8((b + 0x80) >> 8);
+			a = clamp_unorm8((a + 0x80) >> 8);
 
 			uint16_t z = clamp_unorm16(prim.z + prim.dzdx * dx + prim.dzdy * dy);
 			int w = prim.w + prim.dwdx * dx + prim.dwdy * dy;
 			int u = prim.u + prim.dudx * dx + prim.dudy * dy;
 			int v = prim.v + prim.dvdx * dx + prim.dvdy * dy;
 
-			w >>= 8;
+			u <<= 4;
+			v <<= 4;
+			w = (w + 8) >> 4;
 			w = std::max(1, w);
 			u = (u + (w >> 1)) / w;
 			v = (v + (w >> 1)) / w;
