@@ -3,7 +3,6 @@
 #include <utility>
 #include <algorithm>
 #include <assert.h>
-#include <stdio.h>
 
 namespace RetroWarp
 {
@@ -43,8 +42,6 @@ static int wrap_uv(int32_t coord)
 
 void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 {
-	fprintf(stderr, "=== START PRIMITIVE ===\n");
-
 	// Interpolation of UV, Z, W and Color are all based off the floored integer coordinate.
 	int interpolation_base_x = prim.x_a >> 16;
 	int interpolation_base_y = prim.y_lo;
@@ -85,8 +82,6 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 			start_x = (primary_x + raster_rounding) >> (16 + SUBPIXELS_LOG2);
 			end_x = (secondary_x - 1) >> (16 + SUBPIXELS_LOG2);
 		}
-
-		fprintf(stderr, "  Y: %d: [%d, %d]\n", y, start_x, end_x);
 
 		if (start_x < scissor.x)
 			start_x = scissor.x;
@@ -146,7 +141,6 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 			rop->emit_pixel(x, y, z, tex);
 		}
 	}
-	fprintf(stderr, "=== END PRIMITIVE ===\n\n");
 }
 
 RasterizerCPU::FilteredTexel RasterizerCPU::filter_linear_horiz(const Texel &left, const Texel &right, int weight)
