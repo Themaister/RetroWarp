@@ -49,7 +49,7 @@ static int32_t quantize_w(float w)
 
 static int32_t quantize_uv(float v)
 {
-	float rounded = std::round(v * float(1 << 13));
+	float rounded = std::round(v * float(1 << 8));
 	assert(rounded <= float(std::numeric_limits<int32_t>::max()));
 	return int32_t(rounded);
 }
@@ -358,6 +358,8 @@ static unsigned setup_clipped_triangles_clipped_w(PrimitiveSetup *setup, InputPr
 	float min_w = std::numeric_limits<float>::max();
 	for (auto w : ws)
 		min_w = std::min(min_w, w);
+
+	//min_w = 1.0f;
 
 	for (unsigned i = 0; i < 3; i++)
 	{

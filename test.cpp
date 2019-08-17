@@ -13,6 +13,7 @@
 #include "texture_files.hpp"
 #include "gltf.hpp"
 #include "camera.hpp"
+#include "approximate_divider.hpp"
 
 using namespace RetroWarp;
 using namespace Granite;
@@ -81,8 +82,25 @@ void CanvasROP::fill_alpha_opaque()
 			canvas.get(x, y) |= 0xff000000u;
 }
 
+static void test_divider()
+{
+	for (int32_t i = -0x10000; i <= 0x10000; i++)
+	{
+		int32_t res = fixed_divider(i, 1, 0);
+		if (res != i)
+			abort();
+	}
+
+	int32_t res = fixed_divider(4097 * 256, 1, 9);
+	assert(res == (4097 * 256) << 9);
+	res = fixed_divider(-4098 * 256, 1, 9);
+	assert(res == (-4098 * 256) << 9);
+}
+
 int main(int argc, char **argv)
 {
+	setup_fixed_divider();
+	test_divider();
 	if (argc != 2)
 		return EXIT_FAILURE;
 

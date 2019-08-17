@@ -1,4 +1,5 @@
 #include "rasterizer_cpu.hpp"
+#include "approximate_divider.hpp"
 #include <utility>
 #include <algorithm>
 #include <assert.h>
@@ -35,6 +36,11 @@ static uint16_t clamp_unorm16(int z)
 		return uint16_t(z);
 }
 
+static int wrap_uv(int32_t coord)
+{
+	return int32_t((uint32_t(coord) << 11) >> 11);
+}
+
 void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 {
 	fprintf(stderr, "=== START PRIMITIVE ===\n");
@@ -67,15 +73,6 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 		int secondary_x = select_hi ? x_c : x_b;
 
 		int start_x, end_x;
-		// Preserve 3 sub-pixels, X is now 13.3.
-		//primary_x = (primary_x + 0x8000) >> 16;
-		//secondary_x = (secondary_x + 0x8000) >> 16;
-		//if (prim.flags & PRIMITIVE_RIGHT_MAJOR_BIT)
-		//	std::swap(primary_x, secondary_x);
-		// Compute the span for this scanline.
-		//int start_x = (primary_x + ((1 << SUBPIXELS_LOG2) - 1)) >> SUBPIXELS_LOG2;
-		//int end_x = (secondary_x - 1) >> SUBPIXELS_LOG2;
-
 		constexpr int raster_rounding = (1 << (SUBPIXELS_LOG2 + 16)) - 1;
 
 		if (prim.flags & PRIMITIVE_RIGHT_MAJOR_BIT)
@@ -117,25 +114,26 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 			int w = prim.w + prim.dwdx * dx + prim.dwdy * dy;
 			int u = prim.u + prim.dudx * dx + prim.dudy * dy;
 			int v = prim.v + prim.dvdx * dx + prim.dvdy * dy;
+			u = wrap_uv(u);
+			v = wrap_uv(v);
 
-			u <<= 4;
-			v <<= 4;
 			w = (w + 8) >> 4;
-			w = std::max(1, w);
-			u = (u + (w >> 1)) / w;
-			v = (v + (w >> 1)) / w;
 
-			u -= 16;
-			v -= 16;
-			int sub_u = u & 31;
-			int sub_v = v & 31;
-			u >>= 5;
-			v >>= 5;
+			unsigned uw = std::max(1, w);
+			int perspective_u = fixed_divider(u, uw, 9);
+			int perspective_v = fixed_divider(v, uw, 9);
 
-			auto tex_00 = sampler->sample(u, v);
-			auto tex_10 = sampler->sample(u + 1, v);
-			auto tex_01 = sampler->sample(u, v + 1);
-			auto tex_11 = sampler->sample(u + 1, v + 1);
+			perspective_u -= 16;
+			perspective_v -= 16;
+			int sub_u = perspective_u & 31;
+			int sub_v = perspective_v & 31;
+			perspective_u >>= 5;
+			perspective_v >>= 5;
+
+			auto tex_00 = sampler->sample(perspective_u, perspective_v);
+			auto tex_10 = sampler->sample(perspective_u + 1, perspective_v);
+			auto tex_01 = sampler->sample(perspective_u, perspective_v + 1);
+			auto tex_11 = sampler->sample(perspective_u + 1, perspective_v + 1);
 
 			auto tex_0 = filter_linear_horiz(tex_00, tex_10, sub_u);
 			auto tex_1 = filter_linear_horiz(tex_01, tex_11, sub_u);

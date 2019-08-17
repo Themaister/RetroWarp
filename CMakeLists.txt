@@ -29,6 +29,7 @@ add_library(rasterizer STATIC
         primitive_setup.hpp
         triangle_converter.hpp triangle_converter.cpp
         canvas.hpp
+        approximate_divider.cpp approximate_divider.hpp
         rasterizer_cpu.hpp rasterizer_cpu.cpp)
 target_compile_options(rasterizer PRIVATE ${RETROWARP_CXX_FLAGS})
 target_include_directories(rasterizer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
