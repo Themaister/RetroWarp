@@ -1,4 +1,5 @@
 #include "approximate_divider.hpp"
+#include <stdio.h>
 
 #ifdef __GNUC__
 #define leading_zeroes(x) __builtin_clz(x)
@@ -16,12 +17,17 @@ static inline uint32_t leading_zeroes(uint32_t x)
 #endif
 
 enum { INVERSE_BITS = 4 };
-static int32_t inverse_table[1 << INVERSE_BITS + 1];
+static int32_t inverse_table[(1 << INVERSE_BITS) + 1];
 
 void setup_fixed_divider()
 {
+	printf("const int FIXED_LUT[%d] = int[](\n", (1 << INVERSE_BITS) + 1);
 	for (unsigned i = 0; i <= 1 << INVERSE_BITS; i++)
+	{
 		inverse_table[i] = int32_t(double(-0x400000) * 1.0 / (0.5 + (0.5 / (1 << INVERSE_BITS)) * double(i)));
+		printf("    %d%s\n", inverse_table[i], i < (1 << INVERSE_BITS) ? "," : "");
+	}
+	printf(");\n");
 }
 
 int32_t fixed_divider(int32_t x, uint32_t y, unsigned extra_bits)
