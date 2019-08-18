@@ -239,7 +239,7 @@ void main()
         uvec4 tex_1 = filter_linear_horiz(tex_01, tex_11, sub_uv.x);
         uvec4 tex = filter_linear_vert(tex_0, tex_1, sub_uv.y);
 
-        tex = multiply_unorm8(tex, rgba);
+        tex = multiply_unorm8(tex, urgba);
         emit_pixel(tex, z, current_color, current_z);
     }
 

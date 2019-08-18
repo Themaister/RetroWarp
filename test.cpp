@@ -14,6 +14,8 @@
 #include "gltf.hpp"
 #include "camera.hpp"
 #include "approximate_divider.hpp"
+#include "rasterizer_gpu.hpp"
+#include "os_filesystem.hpp"
 
 using namespace RetroWarp;
 using namespace Granite;
@@ -104,7 +106,7 @@ int main(int argc, char **argv)
 	if (argc != 2)
 		return EXIT_FAILURE;
 
-	Global::init(Global::MANAGER_FEATURE_FILESYSTEM_BIT);
+	Global::init();
 
 	GLTF::Parser parser(argv[1]);
 	const SceneFormats::Mesh *mesh = nullptr;
@@ -250,14 +252,29 @@ int main(int argc, char **argv)
 	ViewportTransform vp = { 0.0f, 0.0f, 1280.0f, 720.0f, 0.0f, 1.0f };
 	PrimitiveSetup setup[256];
 
+	std::vector<PrimitiveSetup> setups;
+
 	for (auto &prim : input_primitives)
 	{
 		//unsigned prim_index = unsigned(&prim - input_primitives.data());
 		unsigned count = setup_clipped_triangles(setup, prim, CullMode::CCWOnly, vp);
 		for (unsigned i = 0; i < count; i++)
+		{
 			rasterizer.render_primitive(setup[i]);
+			setups.push_back(setup[i]);
+		}
 	}
 
 	rop.fill_alpha_opaque();
 	rop.save_canvas("/tmp/test.png");
+
+	Global::filesystem()->register_protocol("assets", std::make_unique<OSFilesystem>(ASSET_DIRECTORY));
+
+	RasterizerGPU gpu;
+	gpu.resize(1280, 720);
+	gpu.upload_texture(sampler.tex.get_layout());
+	gpu.clear_color(0);
+	gpu.clear_depth();
+	gpu.rasterize_primitives(setups.data(), setups.size());
+	gpu.save_canvas("/tmp/test_gpu.png");
 }
