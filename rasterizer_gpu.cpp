@@ -39,6 +39,12 @@ RasterizerGPU::RasterizerGPU()
 		throw std::runtime_error("Failed to init instance and device.");
 
 	impl->device.set_context(impl->context);
+
+	auto &features = impl->device.get_device_features();
+	if (!features.storage_8bit_features.storageBuffer8BitAccess)
+		throw std::runtime_error("8-bit storage not supported.");
+	if (!features.storage_16bit_features.storageBuffer16BitAccess)
+		throw std::runtime_error("16-bit storage not supported.");
 }
 
 RasterizerGPU::~RasterizerGPU()

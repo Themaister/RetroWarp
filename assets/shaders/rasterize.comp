@@ -1,5 +1,6 @@
 #version 450
 #extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage : require
 #extension GL_EXT_samplerless_texture_functions : require
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -28,7 +29,7 @@ layout(std430, set = 0, binding = 0) readonly buffer TriangleSetup
 
 layout(std430, set = 0, binding = 1) buffer ColorFramebuffer
 {
-    uint color_data[];
+    u8vec4 color_data[];
 };
 
 layout(std430, set = 0, binding = 2) buffer DepthFramebuffer
@@ -140,11 +141,11 @@ ivec2 wrap_uv(ivec2 uv)
     return (uv << 11) >> 11;
 }
 
-void emit_pixel(uvec4 color, uint z, inout uint out_color, inout uint out_z)
+void emit_pixel(uvec4 color, uint z, inout uvec4 out_color, inout uint out_z)
 {
     if (z < out_z)
     {
-        out_color = pack_color(color);
+        out_color = color;
         out_z = z;
     }
 }
@@ -159,7 +160,7 @@ void main()
     int y = int(coord.y);
     int y_sub = y << SUBPIXELS_LOG2;
 
-    uint current_color = color_data[y * registers.fb_stride + x];
+    uvec4 current_color = uvec4(color_data[y * registers.fb_stride + x]);
     uint current_z = uint(depth_data[y * registers.fb_stride + x]);
 
     int primitive_count = registers.primitive_count;
@@ -243,6 +244,6 @@ void main()
         emit_pixel(tex, z, current_color, current_z);
     }
 
-    color_data[y * registers.fb_stride + x] = current_color;
+    color_data[y * registers.fb_stride + x] = u8vec4(current_color);
     depth_data[y * registers.fb_stride + x] = uint16_t(current_z);
 }
