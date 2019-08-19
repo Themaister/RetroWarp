@@ -1,2 +1,136 @@
 #version 450
-layout(local_size_x = 16, local_size_y = 16) in;
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage : require
+layout(local_size_x = 64) in;
+
+#include "primitive_setup.h"
+#include "constants.h"
+
+layout(std430, set = 0, binding = 0) writeonly buffer TileBitmask
+{
+    uint binned_bitmask[];
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer TriangleSetupPos
+{
+    PrimitiveSetupPos primitives_pos[];
+};
+
+layout(std430, push_constant) uniform Registers
+{
+    uvec2 resolution;
+    int primitive_count;
+    int fb_stride;
+    int scissor_x, scissor_y, scissor_width, scissor_height;
+} registers;
+
+shared uint merged_mask[2];
+
+#define prim primitives_pos[index]
+ivec2 interpolate_x(int index, int y_sub)
+{
+    int x_a = prim.x_a + prim.dxdy_a * (y_sub - int(prim.y_lo));
+    int x_b = prim.x_b + prim.dxdy_b * (y_sub - int(prim.y_lo));
+    int x_c = prim.x_c + prim.dxdy_c * (y_sub - int(prim.y_mid));
+
+    bool select_hi = y_sub >= int(prim_pos.y_mid);
+    int primary_x = x_a;
+    int secondary_x = select_hi ? x_c : x_b;
+    return ivec2(primary_x, secondary_x);
+}
+
+int min2x2(ivec2 a, ivec2 b)
+{
+    ivec2 c = min(a, b);
+    return min(c.x, c.y);
+}
+
+int max2x2(ivec2 a, ivec2 b)
+{
+    ivec2 c = max(a, b);
+    return max(c.x, c.y);
+}
+
+int min2(ivec2 a)
+{
+    return min(a.x, a.y);
+}
+
+int max2(ivec2 a)
+{
+    return max(a.x, a.y);
+}
+
+bool bin_primitive(ivec2 start, ivec2 end, int index)
+{
+    int start_y = start.y << SUBPIXELS_LOG2;
+    int end_y = end.y << SUBPIXELS_LOG2;
+    // First, we clip start/end against y_lo, y_hi.
+    start_y = max(start_y, int(pos.y_lo));
+    end_y = min(end_y, int(pos.y_hi) - 1);
+
+    // Y is clipped out, exit early.
+    if (end_y < start_y)
+        return false;
+
+    int interpolation_base_x = prim.x_a >> 16;
+    int interpolation_base_y = int(prim.y_lo);
+
+    // Evaluate span ranges at Y = start.y, Y = end.y, and Y = y_mid (if y_mid falls within the span range).
+    ivec2 x_lo = interpolate_x(index, start.y);
+    ivec2 x_hi = interpolate_x(index, end.y);
+    int lo_x = min2x2(x_lo, x_hi);
+    int hi_x = max2x2(x_lo, x_hi);
+    int y_mid = int(pos.y_mid);
+    if (y_mid >= start.y && y_mid <= end.y)
+    {
+        ivec2 x_mid = interpolate_x(index, y_mid);
+        lo_x = min(lo_x, min2(x_mid));
+        hi_x = max(hi_x, max2(x_mid));
+    }
+
+    // Snap min/max to grid.
+    int start_x = (lo_x + RASTER_ROUNDING) >> (16 + SUBPIXELS_LOG2);
+    int end_x = (hi_x - 1) >> (16 + SUBPIXELS_LOG2);
+
+    // Clip start/end against raster region.
+    start_x = max(start_x, start.x);
+    end_x = min(end_x, end.x);
+
+    // If start_x <= end_x we will need to rasterize something.
+    return start_x <= end_x;
+}
+#undef prim
+
+void main()
+{
+    ivec2 tile = ivec2(gl_WorkGroupID.xy);
+    ivec2 base_coord = tile * ivec2(TILE_WIDTH, TILE_HEIGHT);
+    ivec2 end_coord = min(base_coord + ivec2(TILE_WIDTH, TILE_HEIGHT), ivec2(registers.resolution)) - 1;
+
+    int primitive_index = int(gl_GlobalInvocationID.x);
+    uint local_index = gl_LocalInvocationIndex;
+
+    bool bin_to_tile = false;
+    if (primitive_index < registers.primitive_count)
+        bin_to_tile = bin_primitive(base_coord, end_coord, primitive_index);
+
+    // TODO: Subgroup ballot would be much nicer here.
+    if (local_index < 2u)
+        merged_mask[local_index] = 0u;
+    barrier();
+
+    uint bit_index = local_index & 31u;
+    uint uint_index = local_index >> 5u;
+    if (bin_to_tile)
+        atomicOr(merged_mask[uint_index], 1u << bit_index);
+
+    barrier();
+
+    if (gl_LocalInvocationIndex < 2u)
+    {
+        int linear_tile = tile.y * MAX_TILES_X + tile.x;
+        uint binned_bitmask_offset = uint(TILE_BINNING_STRIDE * linear_tile);
+        binned_bitmask[binned_bitmask_offset + (gl_WorkGroupID.x << 1u) + local_index] = merged_mask[local_index];
+    }
+}
