@@ -22,6 +22,8 @@ public:
 	void rasterize_primitives(const PrimitiveSetup *setup, size_t count);
 	void upload_texture(const Vulkan::TextureFormatLayout &layout);
 
+	float get_binning_ratio(size_t count);
+
 private:
 	struct Impl;
 	std::unique_ptr<Impl> impl;

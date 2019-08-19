@@ -168,6 +168,56 @@ void RasterizerGPU::rasterize_primitives(const RetroWarp::PrimitiveSetup *setup,
 	impl->device.next_frame_context();
 }
 
+float RasterizerGPU::get_binning_ratio(size_t count)
+{
+	auto cmd = impl->device.request_command_buffer();
+	cmd->barrier(VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+	             VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+	             VK_PIPELINE_STAGE_TRANSFER_BIT,
+	             VK_ACCESS_TRANSFER_READ_BIT);
+
+	Vulkan::BufferCreateInfo info;
+	info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+	info.domain = Vulkan::BufferDomain::CachedHost;
+	info.size = impl->binning_mask_buffer->get_create_info().size;
+	auto dst_buffer = impl->device.create_buffer(info);
+	cmd->copy_buffer(*dst_buffer, *impl->binning_mask_buffer);
+	cmd->barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+	             VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
+
+	Fence fence;
+	impl->device.submit(cmd, &fence);
+	impl->device.next_frame_context();
+
+	fence->wait();
+	auto *ptr = static_cast<uint32_t *>(impl->device.map_host_buffer(*dst_buffer, MEMORY_ACCESS_READ_BIT));
+
+	unsigned num_tiles_x = (impl->width + 15) / 16;
+	unsigned num_tiles_y = (impl->height + 15) / 16;
+	constexpr unsigned NUM_TILES_X = 2048 / 16;
+	constexpr unsigned TILE_BINNING_STRIDE = 0x4000 / 32;
+
+	unsigned max_count = 0;
+	unsigned total_count = 0;
+	for (unsigned y = 0; y < num_tiles_y; y++)
+	{
+		for (unsigned x = 0; x < num_tiles_x; x++)
+		{
+			auto *p = &ptr[TILE_BINNING_STRIDE * (y * NUM_TILES_X + x)];
+			for (size_t i = 0; i < (count + 31) / 32; i++)
+			{
+				uint32_t mask = p[i];
+				unsigned mask_count = __builtin_popcount(mask);
+				total_count += mask_count;
+			}
+			max_count += count;
+		}
+	}
+
+	impl->device.unmap_host_buffer(*dst_buffer, MEMORY_ACCESS_READ_BIT);
+	return float(total_count) / float(max_count);
+}
+
 bool RasterizerGPU::save_canvas(const char *path)
 {
 	auto cmd = impl->device.request_command_buffer();

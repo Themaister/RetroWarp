@@ -277,4 +277,6 @@ int main(int argc, char **argv)
 	gpu.clear_depth();
 	gpu.rasterize_primitives(setups.data(), setups.size());
 	gpu.save_canvas("/tmp/test_gpu.png");
+	float ratio = gpu.get_binning_ratio(setups.size());
+	LOGI("Binning ratio: %f %%\n", 100.0f * ratio);
 }
