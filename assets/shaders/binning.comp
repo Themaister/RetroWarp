@@ -64,7 +64,7 @@ int max2(ivec2 a)
 bool bin_primitive(ivec2 start, ivec2 end, int index)
 {
     int start_y = start.y << SUBPIXELS_LOG2;
-    int end_y = end.y << SUBPIXELS_LOG2;
+    int end_y = (end.y << SUBPIXELS_LOG2) - 1;
     // First, we clip start/end against y_lo, y_hi.
     start_y = max(start_y, int(prim.y_lo));
     end_y = min(end_y, int(prim.y_hi) - 1);
@@ -73,16 +73,13 @@ bool bin_primitive(ivec2 start, ivec2 end, int index)
     if (end_y < start_y)
         return false;
 
-    int interpolation_base_x = prim.x_a >> 16;
-    int interpolation_base_y = int(prim.y_lo);
-
     // Evaluate span ranges at Y = start.y, Y = end.y, and Y = y_mid (if y_mid falls within the span range).
-    ivec2 x_lo = interpolate_x(index, start.y);
-    ivec2 x_hi = interpolate_x(index, end.y);
+    ivec2 x_lo = interpolate_x(index, start_y);
+    ivec2 x_hi = interpolate_x(index, end_y);
     int lo_x = min2x2(x_lo, x_hi);
     int hi_x = max2x2(x_lo, x_hi);
     int y_mid = int(prim.y_mid);
-    if (y_mid >= start_y && y_mid <= end_y)
+    if (y_mid > start_y && y_mid < end_y)
     {
         ivec2 x_mid = interpolate_x(index, y_mid);
         lo_x = min(lo_x, min2(x_mid));
@@ -106,7 +103,7 @@ void main()
 {
     ivec2 tile = ivec2(gl_WorkGroupID.yz);
     ivec2 base_coord = tile * ivec2(TILE_WIDTH, TILE_HEIGHT);
-    ivec2 end_coord = min(base_coord + ivec2(TILE_WIDTH, TILE_HEIGHT), ivec2(registers.resolution)) - 1;
+    ivec2 end_coord = min(base_coord + ivec2(TILE_WIDTH, TILE_HEIGHT), ivec2(registers.resolution));
 
     int primitive_index = int(gl_GlobalInvocationID.x);
     uint local_index = gl_LocalInvocationIndex;
