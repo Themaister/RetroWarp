@@ -27,6 +27,11 @@ layout(std430, set = 0, binding = 3) buffer DepthFramebuffer
     uint16_t depth_data[];
 };
 
+layout(std430, set = 0, binding = 4) readonly buffer Binning
+{
+    uint binning_bitmask[];
+};
+
 layout(set = 1, binding = 0) uniform utexture2D uTexture;
 
 layout(std430, push_constant) uniform Registers
@@ -36,7 +41,6 @@ layout(std430, push_constant) uniform Registers
     int fb_stride;
     int scissor_x, scissor_y, scissor_width, scissor_height;
 } registers;
-
 
 int quant_w(int w)
 {

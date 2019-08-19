@@ -20,6 +20,8 @@ struct RasterizerGPU::Impl
 	BufferHandle depth_buffer;
 	unsigned width = 0;
 	unsigned height = 0;
+
+	BufferHandle binning_mask_buffer;
 };
 
 struct Registers
@@ -45,6 +47,15 @@ RasterizerGPU::RasterizerGPU()
 		throw std::runtime_error("8-bit storage not supported.");
 	if (!features.storage_16bit_features.storageBuffer16BitAccess)
 		throw std::runtime_error("16-bit storage not supported.");
+
+	constexpr unsigned MAX_PRIMITIVES = 0x4000;
+	constexpr unsigned MAX_WIDTH = 2048;
+	constexpr unsigned MAX_HEIGHT = 2048;
+	BufferCreateInfo info;
+	info.domain = BufferDomain::Device;
+	info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+	info.size = ((MAX_WIDTH + 15) / 16) * ((MAX_HEIGHT + 15) / 16) * (MAX_PRIMITIVES / 8);
+	impl->binning_mask_buffer = impl->device.create_buffer(info);
 }
 
 RasterizerGPU::~RasterizerGPU()
@@ -123,12 +134,6 @@ void RasterizerGPU::rasterize_primitives(const RetroWarp::PrimitiveSetup *setup,
 	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
 	             VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT);
 
-	cmd->set_storage_buffer(0, 0, *primitive_buffer_pos);
-	cmd->set_storage_buffer(0, 1, *primitive_buffer_attr);
-	cmd->set_storage_buffer(0, 2, *impl->color_buffer);
-	cmd->set_storage_buffer(0, 3, *impl->depth_buffer);
-	cmd->set_texture(1, 0, impl->image->get_view());
-
 	Registers reg = {};
 	reg.fb_stride = impl->width;
 	reg.primitive_count = count;
@@ -139,6 +144,23 @@ void RasterizerGPU::rasterize_primitives(const RetroWarp::PrimitiveSetup *setup,
 	reg.scissor_width = impl->width;
 	reg.scissor_height = impl->height;
 	cmd->push_constants(&reg, 0, sizeof(reg));
+
+	// Binning
+	cmd->set_program("assets://shaders/binning.comp");
+	cmd->set_storage_buffer(0, 0, *impl->binning_mask_buffer);
+	cmd->set_storage_buffer(0, 1, *primitive_buffer_pos);
+	cmd->dispatch((impl->width + 15) / 16, (impl->height + 15) / 16, (count + 31) / 32);
+
+	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+
+	// Rasterization
+	cmd->set_storage_buffer(0, 0, *primitive_buffer_pos);
+	cmd->set_storage_buffer(0, 1, *primitive_buffer_attr);
+	cmd->set_storage_buffer(0, 2, *impl->color_buffer);
+	cmd->set_storage_buffer(0, 3, *impl->depth_buffer);
+	cmd->set_storage_buffer(0, 4, *impl->binning_mask_buffer);
+	cmd->set_texture(1, 0, impl->image->get_view());
 
 	cmd->set_program("assets://shaders/rasterize.comp");
 	cmd->dispatch((impl->width + 15) / 16, (impl->height + 15) / 16, 1);

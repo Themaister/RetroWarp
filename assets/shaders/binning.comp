@@ -33,7 +33,7 @@ ivec2 interpolate_x(int index, int y_sub)
     int x_b = prim.x_b + prim.dxdy_b * (y_sub - int(prim.y_lo));
     int x_c = prim.x_c + prim.dxdy_c * (y_sub - int(prim.y_mid));
 
-    bool select_hi = y_sub >= int(prim_pos.y_mid);
+    bool select_hi = y_sub >= int(prim.y_mid);
     int primary_x = x_a;
     int secondary_x = select_hi ? x_c : x_b;
     return ivec2(primary_x, secondary_x);
@@ -66,8 +66,8 @@ bool bin_primitive(ivec2 start, ivec2 end, int index)
     int start_y = start.y << SUBPIXELS_LOG2;
     int end_y = end.y << SUBPIXELS_LOG2;
     // First, we clip start/end against y_lo, y_hi.
-    start_y = max(start_y, int(pos.y_lo));
-    end_y = min(end_y, int(pos.y_hi) - 1);
+    start_y = max(start_y, int(prim.y_lo));
+    end_y = min(end_y, int(prim.y_hi) - 1);
 
     // Y is clipped out, exit early.
     if (end_y < start_y)
@@ -81,8 +81,8 @@ bool bin_primitive(ivec2 start, ivec2 end, int index)
     ivec2 x_hi = interpolate_x(index, end.y);
     int lo_x = min2x2(x_lo, x_hi);
     int hi_x = max2x2(x_lo, x_hi);
-    int y_mid = int(pos.y_mid);
-    if (y_mid >= start.y && y_mid <= end.y)
+    int y_mid = int(prim.y_mid);
+    if (y_mid >= start_y && y_mid <= end_y)
     {
         ivec2 x_mid = interpolate_x(index, y_mid);
         lo_x = min(lo_x, min2(x_mid));
