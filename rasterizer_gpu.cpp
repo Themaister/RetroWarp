@@ -102,8 +102,20 @@ void RasterizerGPU::rasterize_primitives(const RetroWarp::PrimitiveSetup *setup,
 	Vulkan::BufferCreateInfo info;
 	info.domain = Vulkan::BufferDomain::Host;
 	info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-	info.size = count * sizeof(PrimitiveSetup);
-	auto primitive_buffer = impl->device.create_buffer(info, setup);
+	info.size = count * sizeof(PrimitiveSetupPos);
+	auto primitive_buffer_pos = impl->device.create_buffer(info);
+	info.size = count * sizeof(PrimitiveSetupAttr);
+	auto primitive_buffer_attr = impl->device.create_buffer(info);
+
+	auto *positions = static_cast<PrimitiveSetupPos *>(impl->device.map_host_buffer(*primitive_buffer_pos, MEMORY_ACCESS_WRITE_BIT));
+	auto *attrs = static_cast<PrimitiveSetupAttr *>(impl->device.map_host_buffer(*primitive_buffer_attr, MEMORY_ACCESS_WRITE_BIT));
+	for (size_t i = 0; i < count; i++)
+	{
+		positions[i] = setup[i].pos;
+		attrs[i] = setup[i].attr;
+	}
+	impl->device.unmap_host_buffer(*primitive_buffer_pos, MEMORY_ACCESS_WRITE_BIT);
+	impl->device.unmap_host_buffer(*primitive_buffer_attr, MEMORY_ACCESS_WRITE_BIT);
 
 	auto cmd = impl->device.request_command_buffer();
 	cmd->barrier(VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
@@ -111,9 +123,10 @@ void RasterizerGPU::rasterize_primitives(const RetroWarp::PrimitiveSetup *setup,
 	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
 	             VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT);
 
-	cmd->set_storage_buffer(0, 0, *primitive_buffer);
-	cmd->set_storage_buffer(0, 1, *impl->color_buffer);
-	cmd->set_storage_buffer(0, 2, *impl->depth_buffer);
+	cmd->set_storage_buffer(0, 0, *primitive_buffer_pos);
+	cmd->set_storage_buffer(0, 1, *primitive_buffer_attr);
+	cmd->set_storage_buffer(0, 2, *impl->color_buffer);
+	cmd->set_storage_buffer(0, 3, *impl->depth_buffer);
 	cmd->set_texture(1, 0, impl->image->get_view());
 
 	Registers reg = {};
@@ -128,7 +141,7 @@ void RasterizerGPU::rasterize_primitives(const RetroWarp::PrimitiveSetup *setup,
 	cmd->push_constants(&reg, 0, sizeof(reg));
 
 	cmd->set_program("assets://shaders/rasterize.comp");
-	cmd->dispatch((impl->width + 7) / 8, (impl->height + 7) / 8, 1);
+	cmd->dispatch((impl->width + 15) / 16, (impl->height + 15) / 16, 1);
 	impl->device.submit(cmd);
 	impl->device.next_frame_context();
 }

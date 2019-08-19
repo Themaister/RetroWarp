@@ -101,23 +101,23 @@ static bool setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input, C
 	int16_t x_b = xs[index_b];
 	int16_t x_c = xs[index_c];
 
-	setup.x_a = x_a << 16;
-	setup.x_b = x_a << 16;
-	setup.x_c = x_b << 16;
+	setup.pos.x_a = x_a << 16;
+	setup.pos.x_b = x_a << 16;
+	setup.pos.x_c = x_b << 16;
 
-	setup.y_lo = y_lo;
-	setup.y_mid = y_mid;
-	setup.y_hi = y_hi;
+	setup.pos.y_lo = y_lo;
+	setup.pos.y_mid = y_mid;
+	setup.pos.y_hi = y_hi;
 
 	// Compute slopes.
-	setup.dxdy_a = round_away_from_zero_divide((x_c - x_a) << 16, std::max(1, y_hi - y_lo));
-	setup.dxdy_b = round_away_from_zero_divide((x_b - x_a) << 16, std::max(1, y_mid - y_lo));
-	setup.dxdy_c = round_away_from_zero_divide((x_c - x_b) << 16, std::max(1, y_hi - y_mid));
+	setup.pos.dxdy_a = round_away_from_zero_divide((x_c - x_a) << 16, std::max(1, y_hi - y_lo));
+	setup.pos.dxdy_b = round_away_from_zero_divide((x_b - x_a) << 16, std::max(1, y_mid - y_lo));
+	setup.pos.dxdy_c = round_away_from_zero_divide((x_c - x_b) << 16, std::max(1, y_hi - y_mid));
 
-	if (setup.dxdy_b < setup.dxdy_a)
-		setup.flags |= PRIMITIVE_RIGHT_MAJOR_BIT;
+	if (setup.pos.dxdy_b < setup.pos.dxdy_a)
+		setup.pos.flags |= PRIMITIVE_RIGHT_MAJOR_BIT;
 
-	quantize_color(setup.color, input.vertices[index_a].color);
+	quantize_color(setup.attr.color, input.vertices[index_a].color);
 
 	// Compute interpolation derivatives.
 	int ab_x = xs[1] - xs[0];
@@ -151,8 +151,8 @@ static bool setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input, C
 		                                  bc_x * input.vertices[0].color[c]);
 	}
 
-	quantize_color(setup.dcolor_dx, dcolor_dx);
-	quantize_color(setup.dcolor_dy, dcolor_dy);
+	quantize_color(setup.attr.dcolor_dx, dcolor_dx);
+	quantize_color(setup.attr.dcolor_dy, dcolor_dy);
 
 	float dzdx = -inv_signed_area * (ab_y * input.vertices[2].z +
 	                                 ca_y * input.vertices[1].z +
@@ -182,26 +182,26 @@ static bool setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input, C
 	                                ca_x * input.vertices[1].v +
 	                                bc_x * input.vertices[0].v);
 
-	setup.z = quantize_z(input.vertices[index_a].z);
-	setup.dzdx = quantize_z(dzdx);
-	setup.dzdy = quantize_z(dzdy);
+	setup.attr.z = quantize_z(input.vertices[index_a].z);
+	setup.attr.dzdx = quantize_z(dzdx);
+	setup.attr.dzdy = quantize_z(dzdy);
 
-	setup.w = quantize_w(input.vertices[index_a].w);
-	setup.dwdx = quantize_w(dwdx);
-	setup.dwdy = quantize_w(dwdy);
+	setup.attr.w = quantize_w(input.vertices[index_a].w);
+	setup.attr.dwdx = quantize_w(dwdx);
+	setup.attr.dwdy = quantize_w(dwdy);
 
-	setup.u = quantize_uv(input.vertices[index_a].u);
-	setup.dudx = quantize_uv(dudx);
-	setup.dudy = quantize_uv(dudy);
+	setup.attr.u = quantize_uv(input.vertices[index_a].u);
+	setup.attr.dudx = quantize_uv(dudx);
+	setup.attr.dudy = quantize_uv(dudy);
 
-	setup.v = quantize_uv(input.vertices[index_a].v);
-	setup.dvdx = quantize_uv(dvdx);
-	setup.dvdy = quantize_uv(dvdy);
+	setup.attr.v = quantize_uv(input.vertices[index_a].v);
+	setup.attr.dvdx = quantize_uv(dvdx);
+	setup.attr.dvdy = quantize_uv(dvdy);
 
-	setup.flags |= PRIMITIVE_PERSPECTIVE_CORRECT_BIT;
+	setup.pos.flags |= PRIMITIVE_PERSPECTIVE_CORRECT_BIT;
 
-	setup.u_offset = input.u_offset;
-	setup.v_offset = input.v_offset;
+	setup.attr.u_offset = input.u_offset;
+	setup.attr.v_offset = input.v_offset;
 
 	return true;
 }

@@ -2,9 +2,16 @@
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_8bit_storage : require
 #extension GL_EXT_samplerless_texture_functions : require
-layout(local_size_x = 8, local_size_y = 8) in;
+layout(local_size_x = 16, local_size_y = 16) in;
 
-struct PrimitiveSetup
+struct PrimitiveSetupPos
+{
+    int x_a, x_b, x_c;
+    int dxdy_a, dxdy_b, dxdy_c;
+    int16_t y_lo, y_mid, y_hi, flags;
+};
+
+struct PrimitiveSetupAttr
 {
     ivec4 uvzw;
     ivec4 duvzw_dx;
@@ -14,25 +21,25 @@ struct PrimitiveSetup
     ivec4 dcolor_dx;
     ivec4 dcolor_dy;
 
-    int x_a, x_b, x_c;
-    int dxdy_a, dxdy_b, dxdy_c;
     i16vec2 uv_offset;
-
-    int16_t y_lo, y_mid, y_hi;
-    int16_t flags;
 };
 
-layout(std430, set = 0, binding = 0) readonly buffer TriangleSetup
+layout(std430, set = 0, binding = 0) readonly buffer TriangleSetupPos
 {
-    PrimitiveSetup primitives[];
+    PrimitiveSetupPos primitives_pos[];
 };
 
-layout(std430, set = 0, binding = 1) buffer ColorFramebuffer
+layout(std430, set = 0, binding = 1) readonly buffer TriangleSetupAttr
+{
+    PrimitiveSetupAttr primitives_attr[];
+};
+
+layout(std430, set = 0, binding = 2) buffer ColorFramebuffer
 {
     u8vec4 color_data[];
 };
 
-layout(std430, set = 0, binding = 2) buffer DepthFramebuffer
+layout(std430, set = 0, binding = 3) buffer DepthFramebuffer
 {
     uint16_t depth_data[];
 };
@@ -166,12 +173,13 @@ void main()
     int primitive_count = registers.primitive_count;
     for (int i = 0; i < primitive_count; i++)
     {
-#define prim primitives[i]
-        int interpolation_base_x = prim.x_a >> 16;
-        int interpolation_base_y = int(prim.y_lo);
+#define prim_pos primitives_pos[i]
+#define prim_attr primitives_attr[i]
+        int interpolation_base_x = prim_pos.x_a >> 16;
+        int interpolation_base_y = int(prim_pos.y_lo);
 
-        int span_begin_y = (int(primitives[i].y_lo) + ((1 << SUBPIXELS_LOG2) - 1)) >> SUBPIXELS_LOG2;
-        int span_end_y = (int(primitives[i].y_hi) - 1) >> SUBPIXELS_LOG2;
+        int span_begin_y = (int(prim_pos.y_lo) + ((1 << SUBPIXELS_LOG2) - 1)) >> SUBPIXELS_LOG2;
+        int span_end_y = (int(prim_pos.y_hi) - 1) >> SUBPIXELS_LOG2;
 
         if (span_begin_y < registers.scissor_y)
             span_begin_y = registers.scissor_y;
@@ -181,18 +189,18 @@ void main()
         if (y < span_begin_y || y > span_end_y)
             continue;
 
-        int x_a = prim.x_a + prim.dxdy_a * (y_sub - int(prim.y_lo));
-        int x_b = prim.x_b + prim.dxdy_b * (y_sub - int(prim.y_lo));
-        int x_c = prim.x_c + prim.dxdy_c * (y_sub - int(prim.y_mid));
+        int x_a = prim_pos.x_a + prim_pos.dxdy_a * (y_sub - int(prim_pos.y_lo));
+        int x_b = prim_pos.x_b + prim_pos.dxdy_b * (y_sub - int(prim_pos.y_lo));
+        int x_c = prim_pos.x_c + prim_pos.dxdy_c * (y_sub - int(prim_pos.y_mid));
 
         // The secondary span edge is split into two edges.
-        bool select_hi = y_sub >= int(prim.y_mid);
+        bool select_hi = y_sub >= int(prim_pos.y_mid);
         int primary_x = x_a;
         int secondary_x = select_hi ? x_c : x_b;
 
         int start_x, end_x;
 
-        if ((int(prim.flags) & PRIMITIVE_RIGHT_MAJOR_BIT) != 0)
+        if ((int(prim_pos.flags) & PRIMITIVE_RIGHT_MAJOR_BIT) != 0)
         {
             start_x = (secondary_x + raster_rounding) >> (16 + SUBPIXELS_LOG2);
             end_x = (primary_x - 1) >> (16 + SUBPIXELS_LOG2);
@@ -215,10 +223,10 @@ void main()
         int dy = y_sub - interpolation_base_y;
         int dx = (x << SUBPIXELS_LOG2) - interpolation_base_x;
 
-        ivec4 rgba = prim.color + prim.dcolor_dx * dx + prim.dcolor_dy * dy;
+        ivec4 rgba = prim_attr.color + prim_attr.dcolor_dx * dx + prim_attr.dcolor_dy * dy;
         uvec4 urgba = uvec4(clamp((rgba + 0x80) >> 8, ivec4(0), ivec4(0xff)));
 
-        ivec4 uvzw = prim.uvzw + prim.duvzw_dx * dx + prim.duvzw_dy * dy;
+        ivec4 uvzw = prim_attr.uvzw + prim_attr.duvzw_dx * dx + prim_attr.duvzw_dy * dy;
         ivec2 uv = wrap_uv(uvzw.xy);
         uint z = clamp_unorm16(uvzw.z);
         int w = quant_w(uvzw.w);
@@ -229,7 +237,7 @@ void main()
         ivec2 sub_uv = uv & 31;
         uv >>= 5;
 
-        uv += ivec2(prim.uv_offset);
+        uv += ivec2(prim_attr.uv_offset);
 
         uvec4 tex_00 = texelFetch(uTexture, uv, 0);
         uvec4 tex_10 = texelFetchOffset(uTexture, uv, 0, ivec2(1, 0));

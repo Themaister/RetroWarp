@@ -43,11 +43,11 @@ static int wrap_uv(int32_t coord)
 void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 {
 	// Interpolation of UV, Z, W and Color are all based off the floored integer coordinate.
-	int interpolation_base_x = prim.x_a >> 16;
-	int interpolation_base_y = prim.y_lo;
+	int interpolation_base_x = prim.pos.x_a >> 16;
+	int interpolation_base_y = prim.pos.y_lo;
 
-	int span_begin_y = (prim.y_lo + ((1 << SUBPIXELS_LOG2) - 1)) >> SUBPIXELS_LOG2;
-	int span_end_y = (prim.y_hi - 1) >> SUBPIXELS_LOG2;
+	int span_begin_y = (prim.pos.y_lo + ((1 << SUBPIXELS_LOG2) - 1)) >> SUBPIXELS_LOG2;
+	int span_end_y = (prim.pos.y_hi - 1) >> SUBPIXELS_LOG2;
 
 	// Scissor.
 	if (span_begin_y < scissor.y)
@@ -60,19 +60,19 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 		int y_sub = y << SUBPIXELS_LOG2;
 		// Need to interpolate at high resolution,
 		// since dxdy requires a very good resolution to resolve near vertical lines.
-		int x_a = prim.x_a + prim.dxdy_a * (y_sub - prim.y_lo);
-		int x_b = prim.x_b + prim.dxdy_b * (y_sub - prim.y_lo);
-		int x_c = prim.x_c + prim.dxdy_c * (y_sub - prim.y_mid);
+		int x_a = prim.pos.x_a + prim.pos.dxdy_a * (y_sub - prim.pos.y_lo);
+		int x_b = prim.pos.x_b + prim.pos.dxdy_b * (y_sub - prim.pos.y_lo);
+		int x_c = prim.pos.x_c + prim.pos.dxdy_c * (y_sub - prim.pos.y_mid);
 
 		// The secondary span edge is split into two edges.
-		bool select_hi = y_sub >= prim.y_mid;
+		bool select_hi = y_sub >= prim.pos.y_mid;
 		int primary_x = x_a;
 		int secondary_x = select_hi ? x_c : x_b;
 
 		int start_x, end_x;
 		constexpr int raster_rounding = (1 << (SUBPIXELS_LOG2 + 16)) - 1;
 
-		if (prim.flags & PRIMITIVE_RIGHT_MAJOR_BIT)
+		if (prim.pos.flags & PRIMITIVE_RIGHT_MAJOR_BIT)
 		{
 			start_x = (secondary_x + raster_rounding) >> (16 + SUBPIXELS_LOG2);
 			end_x = (primary_x - 1) >> (16 + SUBPIXELS_LOG2);
@@ -95,20 +95,20 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 		{
 			int dx = (x << SUBPIXELS_LOG2) - interpolation_base_x;
 
-			int r = prim.color[0] + prim.dcolor_dx[0] * dx + prim.dcolor_dy[0] * dy;
-			int g = prim.color[1] + prim.dcolor_dx[1] * dx + prim.dcolor_dy[1] * dy;
-			int b = prim.color[2] + prim.dcolor_dx[2] * dx + prim.dcolor_dy[2] * dy;
-			int a = prim.color[3] + prim.dcolor_dx[3] * dx + prim.dcolor_dy[3] * dy;
+			int r = prim.attr.color[0] + prim.attr.dcolor_dx[0] * dx + prim.attr.dcolor_dy[0] * dy;
+			int g = prim.attr.color[1] + prim.attr.dcolor_dx[1] * dx + prim.attr.dcolor_dy[1] * dy;
+			int b = prim.attr.color[2] + prim.attr.dcolor_dx[2] * dx + prim.attr.dcolor_dy[2] * dy;
+			int a = prim.attr.color[3] + prim.attr.dcolor_dx[3] * dx + prim.attr.dcolor_dy[3] * dy;
 
 			r = clamp_unorm8((r + 0x80) >> 8);
 			g = clamp_unorm8((g + 0x80) >> 8);
 			b = clamp_unorm8((b + 0x80) >> 8);
 			a = clamp_unorm8((a + 0x80) >> 8);
 
-			uint16_t z = clamp_unorm16(prim.z + prim.dzdx * dx + prim.dzdy * dy);
-			int w = prim.w + prim.dwdx * dx + prim.dwdy * dy;
-			int u = prim.u + prim.dudx * dx + prim.dudy * dy;
-			int v = prim.v + prim.dvdx * dx + prim.dvdy * dy;
+			uint16_t z = clamp_unorm16(prim.attr.z + prim.attr.dzdx * dx + prim.attr.dzdy * dy);
+			int w = prim.attr.w + prim.attr.dwdx * dx + prim.attr.dwdy * dy;
+			int u = prim.attr.u + prim.attr.dudx * dx + prim.attr.dudy * dy;
+			int v = prim.attr.v + prim.attr.dvdx * dx + prim.attr.dvdy * dy;
 			u = wrap_uv(u);
 			v = wrap_uv(v);
 
@@ -125,8 +125,8 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 			perspective_u >>= 5;
 			perspective_v >>= 5;
 
-			perspective_u += prim.u_offset;
-			perspective_v += prim.v_offset;
+			perspective_u += prim.attr.u_offset;
+			perspective_v += prim.attr.v_offset;
 
 			auto tex_00 = sampler->sample(perspective_u, perspective_v);
 			auto tex_10 = sampler->sample(perspective_u + 1, perspective_v);
