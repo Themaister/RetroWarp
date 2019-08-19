@@ -149,7 +149,7 @@ void RasterizerGPU::rasterize_primitives(const RetroWarp::PrimitiveSetup *setup,
 	cmd->set_program("assets://shaders/binning.comp");
 	cmd->set_storage_buffer(0, 0, *impl->binning_mask_buffer);
 	cmd->set_storage_buffer(0, 1, *primitive_buffer_pos);
-	cmd->dispatch((impl->width + 15) / 16, (impl->height + 15) / 16, (count + 31) / 32);
+	cmd->dispatch((count + 63) / 64, (impl->width + 15) / 16, (impl->height + 15) / 16);
 
 	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
