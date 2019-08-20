@@ -181,9 +181,9 @@ int main(int argc, char **argv)
 	}
 
 	Camera cam;
-	cam.look_at(vec3(0.0f, 0.0f, 4.0f), vec3(0.0f));
+	cam.look_at(vec3(0.0f, 0.04f, 0.04f), vec3(0.0f, 0.05f, 0.0f));
 	cam.set_fovy(0.3f * pi<float>());
-	cam.set_depth_range(0.1f, 100.0f);
+	cam.set_depth_range(0.001f, 1.0f);
 	cam.set_aspect(1280.0f / 720.0f);
 	mat4 mvp = cam.get_projection() * cam.get_view();
 
@@ -242,14 +242,14 @@ int main(int argc, char **argv)
 
 	CanvasROP rop;
 	RasterizerCPU rasterizer;
-	rop.canvas.resize(1280, 720);
-	rop.depth_canvas.resize(1280, 720);
-	rasterizer.set_scissor(0, 0, 1280, 720);
+	rop.canvas.resize(640, 360);
+	rop.depth_canvas.resize(640, 360);
+	rasterizer.set_scissor(0, 0, 640, 360);
 	rasterizer.set_sampler(&sampler);
 	rasterizer.set_rop(&rop);
 	rop.clear_depth();
 
-	ViewportTransform vp = { 0.0f, 0.0f, 1280.0f, 720.0f, 0.0f, 1.0f };
+	ViewportTransform vp = { 0.0f, 0.0f, 640.0f, 360.0f, 0.0f, 1.0f };
 	PrimitiveSetup setup[256];
 
 	std::vector<PrimitiveSetup> setups;
@@ -271,7 +271,7 @@ int main(int argc, char **argv)
 	Global::filesystem()->register_protocol("assets", std::make_unique<OSFilesystem>(ASSET_DIRECTORY));
 
 	RasterizerGPU gpu;
-	gpu.resize(1280, 720);
+	gpu.resize(640, 360);
 	gpu.upload_texture(sampler.tex.get_layout());
 	gpu.clear_color(0);
 	gpu.clear_depth();

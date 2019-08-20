@@ -356,6 +356,32 @@ static unsigned clip_triangles(InputPrimitive *outputs, const InputPrimitive *in
 
 static unsigned setup_clipped_triangles_clipped_w(PrimitiveSetup *setup, InputPrimitive &prim, CullMode mode, const ViewportTransform &vp)
 {
+	// Cull primitives on X/Y early.
+	if (prim.vertices[0].x < -prim.vertices[0].w &&
+	    prim.vertices[1].x < -prim.vertices[1].w &&
+	    prim.vertices[2].x < -prim.vertices[2].w)
+	{
+		return 0;
+	}
+	else if (prim.vertices[0].y < -prim.vertices[0].w &&
+	         prim.vertices[1].y < -prim.vertices[1].w &&
+	         prim.vertices[2].y < -prim.vertices[2].w)
+	{
+		return 0;
+	}
+	else if (prim.vertices[0].x > prim.vertices[0].w &&
+	         prim.vertices[1].x > prim.vertices[1].w &&
+	         prim.vertices[2].x > prim.vertices[2].w)
+	{
+		return 0;
+	}
+	else if (prim.vertices[0].y > prim.vertices[0].w &&
+	         prim.vertices[1].y > prim.vertices[1].w &&
+	         prim.vertices[2].y > prim.vertices[2].w)
+	{
+		return 0;
+	}
+
 	InputPrimitive tmp_a[256];
 	InputPrimitive tmp_b[256];
 

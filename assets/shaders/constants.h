@@ -13,6 +13,8 @@ const int TILE_WIDTH = 16;
 const int TILE_HEIGHT = 16;
 const int MAX_TILES_X = MAX_WIDTH / TILE_WIDTH;
 const int MAX_TILES_Y = MAX_HEIGHT / TILE_HEIGHT;
+const int MAX_TILES_X_LOW_RES = MAX_WIDTH / (4 * TILE_WIDTH);
+const int MAX_TILES_Y_LOW_RES = MAX_HEIGHT / (4 * TILE_HEIGHT);
 const int RASTER_ROUNDING = (1 << (SUBPIXELS_LOG2 + 16)) - 1;
 
 #endif

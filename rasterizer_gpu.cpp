@@ -22,6 +22,7 @@ struct RasterizerGPU::Impl
 	unsigned height = 0;
 
 	BufferHandle binning_mask_buffer;
+	BufferHandle binning_mask_buffer_low_res;
 	BufferHandle binning_mask_buffer_coarse;
 };
 
@@ -55,8 +56,14 @@ RasterizerGPU::RasterizerGPU()
 	BufferCreateInfo info;
 	info.domain = BufferDomain::Device;
 	info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+
 	info.size = ((MAX_WIDTH + 15) / 16) * ((MAX_HEIGHT + 15) / 16) * (MAX_PRIMITIVES / 8);
 	impl->binning_mask_buffer = impl->device.create_buffer(info);
+
+	info.size = info.size / 16;
+	impl->binning_mask_buffer_low_res = impl->device.create_buffer(info);
+
+	info.size = ((MAX_WIDTH + 15) / 16) * ((MAX_HEIGHT + 15) / 16) * (MAX_PRIMITIVES / 8);
 	info.size = (info.size + 31) / 32;
 	impl->binning_mask_buffer_coarse = impl->device.create_buffer(info);
 }
@@ -147,15 +154,32 @@ void RasterizerGPU::rasterize_primitives(const RetroWarp::PrimitiveSetup *setup,
 	reg.scissor_width = impl->width;
 	reg.scissor_height = impl->height;
 
+	auto t0 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+
+	// Binning low-res prepass
+	cmd->set_program("assets://shaders/binning_low_res.comp");
+	cmd->set_storage_buffer(0, 0, *impl->binning_mask_buffer_low_res);
+	cmd->set_storage_buffer(0, 1, *primitive_buffer_pos);
+	cmd->push_constants(&reg, 0, sizeof(reg));
+	cmd->dispatch((count + 63) / 64, (impl->width + 63) / 64, (impl->height + 63) / 64);
+
+	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+
+	auto t1 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+
 	// Binning
 	cmd->set_program("assets://shaders/binning.comp");
 	cmd->set_storage_buffer(0, 0, *impl->binning_mask_buffer);
 	cmd->set_storage_buffer(0, 1, *primitive_buffer_pos);
+	cmd->set_storage_buffer(0, 2, *impl->binning_mask_buffer_low_res);
 	cmd->push_constants(&reg, 0, sizeof(reg));
 	cmd->dispatch((count + 63) / 64, (impl->width + 15) / 16, (impl->height + 15) / 16);
 
 	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+
+	auto t2 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 
 	// Merge coarse mask
 	cmd->set_program("assets://shaders/build_coarse_mask.comp");
@@ -167,6 +191,8 @@ void RasterizerGPU::rasterize_primitives(const RetroWarp::PrimitiveSetup *setup,
 
 	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+
+	auto t3 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 
 	// Rasterization
 	cmd->set_program("assets://shaders/rasterize.comp");
@@ -180,8 +206,25 @@ void RasterizerGPU::rasterize_primitives(const RetroWarp::PrimitiveSetup *setup,
 
 	cmd->push_constants(&reg, 0, sizeof(reg));
 	cmd->dispatch((impl->width + 15) / 16, (impl->height + 15) / 16, 1);
+
+	auto t4 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+
 	impl->device.submit(cmd);
 	impl->device.next_frame_context();
+	impl->device.wait_idle();
+
+	if (t0->is_signalled() && t1->is_signalled() && t2->is_signalled() && t3->is_signalled() && t4->is_signalled())
+	{
+		double time0 = t0->get_timestamp();
+		double time1 = t1->get_timestamp();
+		double time2 = t2->get_timestamp();
+		double time3 = t3->get_timestamp();
+		double time4 = t4->get_timestamp();
+		LOGI("Pre-binning time: %.6f ms\n", 1000.0 * (time1 - time0));
+		LOGI("Binning time: %.6f ms\n", 1000.0 * (time2 - time1));
+		LOGI("Merge coarse mask time: %.6f ms\n", 1000.0 * (time3 - time2));
+		LOGI("Rasterize time: %.6f ms\n", 1000.0 * (time4 - time3));
+	}
 }
 
 float RasterizerGPU::get_binning_ratio(size_t count)

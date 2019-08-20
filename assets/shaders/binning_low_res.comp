@@ -16,11 +16,6 @@ layout(std430, set = 0, binding = 1) readonly buffer TriangleSetupPos
     PrimitiveSetupPos primitives_pos[];
 };
 
-layout(std430, set = 0, binding = 2) readonly buffer TileBitmaskLowRes
-{
-    uint binned_bitmask_low_res[];
-};
-
 layout(std430, push_constant) uniform Registers
 {
     uvec2 resolution;
@@ -107,20 +102,15 @@ bool bin_primitive(ivec2 start, ivec2 end, int index)
 void main()
 {
     ivec2 tile = ivec2(gl_WorkGroupID.yz);
-    ivec2 base_coord = tile * ivec2(TILE_WIDTH, TILE_HEIGHT);
-    ivec2 end_coord = min(base_coord + ivec2(TILE_WIDTH, TILE_HEIGHT), ivec2(registers.resolution));
+    ivec2 base_coord = tile * ivec2(TILE_WIDTH * 4, TILE_HEIGHT * 4);
+    ivec2 end_coord = min(base_coord + ivec2(TILE_WIDTH * 4, TILE_HEIGHT * 4), ivec2(registers.resolution));
 
     int primitive_index = int(gl_GlobalInvocationID.x);
     uint local_index = gl_LocalInvocationIndex;
 
     bool bin_to_tile = false;
     if (primitive_index < registers.primitive_count)
-    {
-        int linear_tile_lowres = (tile.y >> 2) * MAX_TILES_X_LOW_RES + (tile.x >> 2);
-        int binned_bitmask_offset = linear_tile_lowres * TILE_BINNING_STRIDE + (primitive_index >> 5);
-        if ((binned_bitmask_low_res[binned_bitmask_offset] & (1 << (primitive_index & 31))) != 0)
-            bin_to_tile = bin_primitive(base_coord, end_coord, primitive_index);
-    }
+        bin_to_tile = bin_primitive(base_coord, end_coord, primitive_index);
 
     // TODO: Subgroup ballot would be much nicer here.
     if (local_index < 2u)
@@ -136,7 +126,7 @@ void main()
 
     if (local_index < 2u)
     {
-        int linear_tile = tile.y * MAX_TILES_X + tile.x;
+        int linear_tile = tile.y * MAX_TILES_X_LOW_RES + tile.x;
         uint binned_bitmask_offset = uint(TILE_BINNING_STRIDE * linear_tile);
         binned_bitmask[binned_bitmask_offset + (gl_WorkGroupID.x << 1u) + local_index] = merged_mask[local_index];
     }
