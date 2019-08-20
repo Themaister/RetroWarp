@@ -32,6 +32,11 @@ layout(std430, set = 0, binding = 4) readonly buffer Binning
     uint binning_bitmask[];
 };
 
+layout(std430, set = 0, binding = 5) readonly buffer CoarseBinning
+{
+    uint coarse_binning_bitmask[];
+};
+
 layout(set = 1, binding = 0) uniform utexture2D uTexture;
 
 layout(std430, push_constant) uniform Registers
@@ -157,93 +162,105 @@ void main()
     int tile_x = int(gl_WorkGroupID.x);
     int tile_y = int(gl_WorkGroupID.y);
     int linear_tile_base = (tile_y * MAX_TILES_X + tile_x) * TILE_BINNING_STRIDE;
-    int primitive_mask_count = registers.primitive_count >> 5;
+    int linear_tile_base_coarse = (tile_y * MAX_TILES_X + tile_x) * TILE_BINNING_STRIDE_COARSE;
+    int primitive_mask_count = (registers.primitive_count + 31) >> 5;
+    int primitive_coarse_mask_count = (primitive_mask_count + 31) >> 5;
 
-    for (int mask_index = 0; mask_index < primitive_mask_count; mask_index++)
+    for (int coarse_mask_index = 0; coarse_mask_index < primitive_coarse_mask_count; coarse_mask_index++)
     {
-        uint binned = binning_bitmask[linear_tile_base + mask_index];
-        while (binned != 0u)
+        uint coarse_binned = coarse_binning_bitmask[linear_tile_base_coarse + coarse_mask_index];
+        while (coarse_binned != 0u)
         {
-            int i = findLSB(binned) + (mask_index << 5);
-            binned &= ~uint(1 << i);
+            int mask_index = findLSB(coarse_binned);
+            coarse_binned &= ~uint(1 << mask_index);
+            mask_index += coarse_mask_index * 32;
+            uint binned = binning_bitmask[linear_tile_base + mask_index];
+
+            while (binned != 0u)
+            {
+                int i = findLSB(binned);
+                binned &= ~uint(1 << i);
+                i += mask_index * 32;
 
 #define prim_pos primitives_pos[i]
 #define prim_attr primitives_attr[i]
-            int interpolation_base_x = prim_pos.x_a >> 16;
-            int interpolation_base_y = int(prim_pos.y_lo);
 
-            int span_begin_y = (int(prim_pos.y_lo) + ((1 << SUBPIXELS_LOG2) - 1)) >> SUBPIXELS_LOG2;
-            int span_end_y = (int(prim_pos.y_hi) - 1) >> SUBPIXELS_LOG2;
+                int interpolation_base_x = prim_pos.x_a >> 16;
+                int interpolation_base_y = int(prim_pos.y_lo);
 
-            if (span_begin_y < registers.scissor_y)
-                span_begin_y = registers.scissor_y;
-            if (span_end_y >= registers.scissor_y + registers.scissor_height)
-                span_end_y = registers.scissor_y + registers.scissor_height - 1;
+                int span_begin_y = (int(prim_pos.y_lo) + ((1 << SUBPIXELS_LOG2) - 1)) >> SUBPIXELS_LOG2;
+                int span_end_y = (int(prim_pos.y_hi) - 1) >> SUBPIXELS_LOG2;
 
-            if (y < span_begin_y || y > span_end_y)
-                continue;
+                if (span_begin_y < registers.scissor_y)
+                    span_begin_y = registers.scissor_y;
+                if (span_end_y >= registers.scissor_y + registers.scissor_height)
+                    span_end_y = registers.scissor_y + registers.scissor_height - 1;
 
-            int x_a = prim_pos.x_a + prim_pos.dxdy_a * (y_sub - int(prim_pos.y_lo));
-            int x_b = prim_pos.x_b + prim_pos.dxdy_b * (y_sub - int(prim_pos.y_lo));
-            int x_c = prim_pos.x_c + prim_pos.dxdy_c * (y_sub - int(prim_pos.y_mid));
+                if (y < span_begin_y || y > span_end_y)
+                    continue;
 
-            // The secondary span edge is split into two edges.
-            bool select_hi = y_sub >= int(prim_pos.y_mid);
-            int primary_x = x_a;
-            int secondary_x = select_hi ? x_c : x_b;
+                int x_a = prim_pos.x_a + prim_pos.dxdy_a * (y_sub - int(prim_pos.y_lo));
+                int x_b = prim_pos.x_b + prim_pos.dxdy_b * (y_sub - int(prim_pos.y_lo));
+                int x_c = prim_pos.x_c + prim_pos.dxdy_c * (y_sub - int(prim_pos.y_mid));
 
-            int start_x, end_x;
+                // The secondary span edge is split into two edges.
+                bool select_hi = y_sub >= int(prim_pos.y_mid);
+                int primary_x = x_a;
+                int secondary_x = select_hi ? x_c : x_b;
 
-            if ((int(prim_pos.flags) & PRIMITIVE_RIGHT_MAJOR_BIT) != 0)
-            {
-                start_x = (secondary_x + RASTER_ROUNDING) >> (16 + SUBPIXELS_LOG2);
-                end_x = (primary_x - 1) >> (16 + SUBPIXELS_LOG2);
+                int start_x, end_x;
+
+                if ((int(prim_pos.flags) & PRIMITIVE_RIGHT_MAJOR_BIT) != 0)
+                {
+                    start_x = (secondary_x + RASTER_ROUNDING) >> (16 + SUBPIXELS_LOG2);
+                    end_x = (primary_x - 1) >> (16 + SUBPIXELS_LOG2);
+                }
+                else
+                {
+                    start_x = (primary_x + RASTER_ROUNDING) >> (16 + SUBPIXELS_LOG2);
+                    end_x = (secondary_x - 1) >> (16 + SUBPIXELS_LOG2);
+                }
+
+                if (start_x < registers.scissor_x)
+                    start_x = registers.scissor_x;
+                if (end_x >= registers.scissor_x + registers.scissor_width)
+                    end_x = registers.scissor_x + registers.scissor_width - 1;
+
+                if (x < start_x || x > end_x)
+                    continue;
+
+                // We've passed the rasterization test. Interpolate colors, Z, 1/W.
+                int dy = y_sub - interpolation_base_y;
+                int dx = (x << SUBPIXELS_LOG2) - interpolation_base_x;
+
+                ivec4 rgba = prim_attr.color + prim_attr.dcolor_dx * dx + prim_attr.dcolor_dy * dy;
+                uvec4 urgba = uvec4(clamp((rgba + 0x80) >> 8, ivec4(0), ivec4(0xff)));
+
+                ivec4 uvzw = prim_attr.uvzw + prim_attr.duvzw_dx * dx + prim_attr.duvzw_dy * dy;
+                ivec2 uv = wrap_uv(uvzw.xy);
+                uint z = clamp_unorm16(uvzw.z);
+                int w = quant_w(uvzw.w);
+
+                uv = fixed_uv_divider(uv, w);
+
+                uv -= 16;
+                ivec2 sub_uv = uv & 31;
+                uv >>= 5;
+
+                uv += ivec2(prim_attr.uv_offset);
+
+                uvec4 tex_00 = texelFetch(uTexture, uv, 0);
+                uvec4 tex_10 = texelFetchOffset(uTexture, uv, 0, ivec2(1, 0));
+                uvec4 tex_01 = texelFetchOffset(uTexture, uv, 0, ivec2(0, 1));
+                uvec4 tex_11 = texelFetchOffset(uTexture, uv, 0, ivec2(1, 1));
+
+                uvec4 tex_0 = filter_linear_horiz(tex_00, tex_10, sub_uv.x);
+                uvec4 tex_1 = filter_linear_horiz(tex_01, tex_11, sub_uv.x);
+                uvec4 tex = filter_linear_vert(tex_0, tex_1, sub_uv.y);
+
+                tex = multiply_unorm8(tex, urgba);
+                emit_pixel(tex, z, current_color, current_z);
             }
-            else
-            {
-                start_x = (primary_x + RASTER_ROUNDING) >> (16 + SUBPIXELS_LOG2);
-                end_x = (secondary_x - 1) >> (16 + SUBPIXELS_LOG2);
-            }
-
-            if (start_x < registers.scissor_x)
-                start_x = registers.scissor_x;
-            if (end_x >= registers.scissor_x + registers.scissor_width)
-                end_x = registers.scissor_x + registers.scissor_width - 1;
-
-            if (x < start_x || x > end_x)
-                continue;
-
-            // We've passed the rasterization test. Interpolate colors, Z, 1/W.
-            int dy = y_sub - interpolation_base_y;
-            int dx = (x << SUBPIXELS_LOG2) - interpolation_base_x;
-
-            ivec4 rgba = prim_attr.color + prim_attr.dcolor_dx * dx + prim_attr.dcolor_dy * dy;
-            uvec4 urgba = uvec4(clamp((rgba + 0x80) >> 8, ivec4(0), ivec4(0xff)));
-
-            ivec4 uvzw = prim_attr.uvzw + prim_attr.duvzw_dx * dx + prim_attr.duvzw_dy * dy;
-            ivec2 uv = wrap_uv(uvzw.xy);
-            uint z = clamp_unorm16(uvzw.z);
-            int w = quant_w(uvzw.w);
-
-            uv = fixed_uv_divider(uv, w);
-
-            uv -= 16;
-            ivec2 sub_uv = uv & 31;
-            uv >>= 5;
-
-            uv += ivec2(prim_attr.uv_offset);
-
-            uvec4 tex_00 = texelFetch(uTexture, uv, 0);
-            uvec4 tex_10 = texelFetchOffset(uTexture, uv, 0, ivec2(1, 0));
-            uvec4 tex_01 = texelFetchOffset(uTexture, uv, 0, ivec2(0, 1));
-            uvec4 tex_11 = texelFetchOffset(uTexture, uv, 0, ivec2(1, 1));
-
-            uvec4 tex_0 = filter_linear_horiz(tex_00, tex_10, sub_uv.x);
-            uvec4 tex_1 = filter_linear_horiz(tex_01, tex_11, sub_uv.x);
-            uvec4 tex = filter_linear_vert(tex_0, tex_1, sub_uv.y);
-
-            tex = multiply_unorm8(tex, urgba);
-            emit_pixel(tex, z, current_color, current_z);
         }
     }
 
