@@ -1,0 +1,54 @@
+#version 450
+#extension GL_EXT_shader_16bit_storage : require
+layout(local_size_x = 64) in;
+
+#include "constants.h"
+#include "fb_info.h"
+
+layout(std430, set = 0, binding = 0) readonly buffer TileTotals
+{
+    uint16_t tile_sums[];
+};
+
+layout(std430, set = 0, binding = 1) writeonly buffer HorizPrefixSum
+{
+    u16vec2 horiz_prefix_sums[];
+};
+
+layout(std430, set = 0, binding = 2) writeonly buffer HorizTotal
+{
+    uint16_t horiz_total[];
+};
+
+shared uint shared_counts[gl_WorkGroupSize.x];
+
+void main()
+{
+    uint y_offset = gl_WorkGroupID.y * uint(MAX_TILES_X);
+    uint tile_x = gl_LocalInvocationIndex;
+    uvec2 count_orig = uvec2(tile_sums[y_offset + tile_x]);
+    uvec2 count = count_orig;
+    count.y += count.x;
+    shared_counts[tile_x] = count.y;
+    barrier();
+
+    for (uint step = 2u; step <= gl_WorkGroupSize.x; step <<= 2u)
+    {
+        uint mask = step - 1u;
+        uint inv_mask = ~mask;
+        uint local_index_masked = tile_x & mask;
+        uint local_index_inv_masked = tile_x & inv_mask;
+        mask >>= 1u;
+        if (local_index_masked > mask)
+        {
+            uint src_index = local_index_inv_masked + mask;
+            count += shared_counts[src_index];
+            shared_counts[tile_x] = count.y;
+        }
+        barrier();
+    }
+
+    horiz_prefix_sums[y_offset + tile_x] = u16vec2(count - count_orig);
+    if (gl_LocalInvocationIndex == gl_WorkGroupSize.x - 1u)
+        horiz_total[gl_WorkGroupID.y] = uint16_t(count.y);
+}

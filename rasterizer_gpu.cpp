@@ -97,12 +97,22 @@ struct RasterizerGPU::Impl
 
 	BBox compute_bbox(const PrimitiveSetup &setup) const;
 	bool clip_bbox_scissor(BBox &clipped_bbox, const BBox &bbox) const;
+
+	void set_fb_info(CommandBuffer &cmd);
+	void clear_indirect_buffer(CommandBuffer &cmd);
+	void binning_low_res_prepass(CommandBuffer &cmd);
+	void binning_full_res(CommandBuffer &cmd);
+	void build_coarse_mask(CommandBuffer &cmd);
+	void run_per_tile_prefix_sum(CommandBuffer &cmd);
+	void run_horiz_prefix_sum(CommandBuffer &cmd);
+	void run_rop(CommandBuffer &cmd);
 };
 
 struct FBInfo
 {
 	int32_t scissor_x, scissor_y, scissor_width, scissor_height;
 	uvec2 resolution;
+	uvec2 resolution_tiles;
 	uint32_t fb_stride;
 	uint32_t primitive_count;
 	uint32_t primitive_count_32;
@@ -122,7 +132,7 @@ constexpr int MAX_TILES_X = MAX_WIDTH / TILE_WIDTH;
 constexpr int MAX_TILES_Y = MAX_HEIGHT / TILE_HEIGHT;
 constexpr int MAX_TILES_X_LOW_RES = MAX_WIDTH / (4 * TILE_WIDTH);
 constexpr int MAX_TILES_Y_LOW_RES = MAX_HEIGHT / (4 * TILE_HEIGHT);
-constexpr int MAX_NUM_TILE_INSTANCES = 0x10000;
+constexpr int MAX_NUM_TILE_INSTANCES = 0xffff;
 const int RASTER_ROUNDING = (1 << (SUBPIXELS_LOG2 + 16)) - 1;
 
 struct PerTileData
@@ -239,6 +249,103 @@ void RasterizerGPU::Impl::end_staging()
 	staging.mapped_attributes = nullptr;
 }
 
+void RasterizerGPU::Impl::clear_indirect_buffer(CommandBuffer &cmd)
+{
+	cmd.set_program("assets://shaders/clear_indirect_buffers.comp");
+	cmd.set_storage_buffer(0, 0, *raster_work.item_count_per_variant);
+	cmd.dispatch(1, 1, 1);
+}
+
+void RasterizerGPU::Impl::binning_low_res_prepass(CommandBuffer &cmd)
+{
+	cmd.set_program("assets://shaders/binning_low_res.comp");
+	cmd.set_storage_buffer(0, 0, *binning.mask_buffer_low_res);
+	cmd.set_storage_buffer(0, 1, *staging.positions);
+	cmd.dispatch((staging.count + 63) / 64,
+	             (width + 4 * TILE_WIDTH - 1) / (4 * TILE_WIDTH),
+	             (height + 4 * TILE_HEIGHT - 1) / (4 * TILE_HEIGHT));
+
+}
+
+void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd)
+{
+	cmd.set_program("assets://shaders/binning.comp");
+	cmd.set_storage_buffer(0, 0, *binning.mask_buffer);
+	cmd.set_storage_buffer(0, 1, *staging.positions);
+	cmd.set_storage_buffer(0, 2, *binning.mask_buffer_low_res);
+	cmd.dispatch((staging.count + 63) / 64,
+	             (width + TILE_WIDTH - 1) / TILE_WIDTH,
+	             (height + TILE_HEIGHT - 1) / TILE_HEIGHT);
+}
+
+void RasterizerGPU::Impl::build_coarse_mask(CommandBuffer &cmd)
+{
+	uint32_t num_masks = (staging.count + 31) / 32;
+	cmd.set_program("assets://shaders/build_coarse_mask.comp");
+	cmd.set_storage_buffer(0, 0, *binning.mask_buffer);
+	cmd.set_storage_buffer(0, 1, *binning.mask_buffer_coarse);
+	cmd.push_constants(&num_masks, 0, sizeof(num_masks));
+	cmd.dispatch((num_masks + 63) / 64,
+	             (width + TILE_WIDTH - 1) / TILE_WIDTH,
+	             (height + TILE_HEIGHT - 1) / TILE_HEIGHT);
+}
+
+void RasterizerGPU::Impl::run_per_tile_prefix_sum(CommandBuffer &cmd)
+{
+	cmd.set_program("assets://shaders/tile_prefix_sum.comp");
+	cmd.set_storage_buffer(0, 0, *binning.mask_buffer);
+	cmd.set_storage_buffer(0, 1, *tile_count.tile_prefix_sum);
+	cmd.set_storage_buffer(0, 2, *tile_count.tile_total);
+
+	uint32_t num_masks = (staging.count + 31) / 32;
+	uint32_t num_mask_groups = (num_masks + 63) / 64;
+
+	unsigned tiles_x = (width + TILE_WIDTH - 1) / TILE_WIDTH;
+	unsigned tiles_y = (height + TILE_HEIGHT - 1) / TILE_HEIGHT;
+	cmd.dispatch(tiles_x, tiles_y, 1);
+}
+
+void RasterizerGPU::Impl::run_horiz_prefix_sum(CommandBuffer &cmd)
+{
+	cmd.set_program("assets://shaders/horiz_prefix_sum.comp");
+	cmd.set_storage_buffer(0, 0, *tile_count.tile_total);
+	cmd.set_storage_buffer(0, 1, *tile_count.horiz_prefix_sum);
+	cmd.set_storage_buffer(0, 2, *tile_count.horiz_total);
+	unsigned tiles_y = (height + TILE_HEIGHT - 1) / TILE_HEIGHT;
+	cmd.dispatch(1, tiles_y, 1);
+}
+
+void RasterizerGPU::Impl::set_fb_info(CommandBuffer &cmd)
+{
+	auto *fb_info = cmd.allocate_typed_constant_data<FBInfo>(2, 0, 1);
+	fb_info->scissor_x = 0;
+	fb_info->scissor_y = 0;
+	fb_info->scissor_width = width;
+	fb_info->scissor_height = height;
+	fb_info->resolution.x = width;
+	fb_info->resolution.y = height;
+	fb_info->resolution_tiles.x = (width + TILE_WIDTH - 1) / TILE_WIDTH;
+	fb_info->resolution_tiles.y = (height + TILE_HEIGHT - 1) / TILE_HEIGHT;
+	fb_info->fb_stride = width;
+	fb_info->primitive_count = staging.count;
+	uint32_t num_masks = (staging.count + 31) / 32;
+	fb_info->primitive_count_32 = num_masks;
+	fb_info->primitive_count_1024 = (staging.count + 1023) / 1024;
+}
+
+void RasterizerGPU::Impl::run_rop(CommandBuffer &cmd)
+{
+	cmd.set_program("assets://shaders/rasterize.comp");
+	cmd.set_storage_buffer(0, 0, *staging.positions);
+	cmd.set_storage_buffer(0, 1, *staging.attributes);
+	cmd.set_storage_buffer(0, 2, *color_buffer);
+	cmd.set_storage_buffer(0, 3, *depth_buffer);
+	cmd.set_storage_buffer(0, 4, *binning.mask_buffer);
+	cmd.set_storage_buffer(0, 5, *binning.mask_buffer_coarse);
+	cmd.set_texture(1, 0, image->get_view());
+	cmd.dispatch((width + TILE_WIDTH - 1) / TILE_WIDTH, (height + TILE_HEIGHT - 1) / TILE_HEIGHT, 1);
+}
+
 void RasterizerGPU::Impl::flush()
 {
 	end_staging();
@@ -248,97 +355,41 @@ void RasterizerGPU::Impl::flush()
 	device.next_frame_context();
 	auto cmd = device.request_command_buffer();
 
-	auto *fb_info = cmd->allocate_typed_constant_data<FBInfo>(2, 0, 1);
-	fb_info->scissor_x = 0;
-	fb_info->scissor_y = 0;
-	fb_info->scissor_width = width;
-	fb_info->scissor_height = height;
-	fb_info->resolution.x = width;
-	fb_info->resolution.y = height;
-	fb_info->fb_stride = width;
-	fb_info->primitive_count = staging.count;
-	uint32_t num_masks = (staging.count + 31) / 32;
-	fb_info->primitive_count_32 = num_masks;
-	fb_info->primitive_count_1024 = (staging.count + 1023) / 1024;
+	set_fb_info(*cmd);
 
-	auto t0 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-
-	// Clear indirect buffer
-	cmd->set_program("assets://shaders/clear_indirect_buffers.comp");
-	cmd->set_storage_buffer(0, 0, *raster_work.item_count_per_variant);
-	cmd->dispatch(1, 1, 1);
-
-	// Binning low-res prepass
-	cmd->set_program("assets://shaders/binning_low_res.comp");
-	cmd->set_storage_buffer(0, 0, *binning.mask_buffer_low_res);
-	cmd->set_storage_buffer(0, 1, *staging.positions);
-	cmd->dispatch((staging.count + 63) / 64,
-	              (width + 4 * TILE_WIDTH - 1) / (4 * TILE_WIDTH),
-	              (height + 4 * TILE_HEIGHT - 1) / (4 * TILE_HEIGHT));
+	// This part can overlap with previous flush.
+	// Clear indirect buffer.
+	clear_indirect_buffer(*cmd);
+	// Binning low-res prepass.
+	binning_low_res_prepass(*cmd);
 
 	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
 
-	auto t1 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-
-	// Binning
-	cmd->set_program("assets://shaders/binning.comp");
-	cmd->set_storage_buffer(0, 0, *binning.mask_buffer);
-	cmd->set_storage_buffer(0, 1, *staging.positions);
-	cmd->set_storage_buffer(0, 2, *binning.mask_buffer_low_res);
-	cmd->dispatch((staging.count + 63) / 64,
-	              (width + TILE_WIDTH - 1) / TILE_WIDTH,
-	              (height + TILE_HEIGHT - 1) / TILE_HEIGHT);
+	// Binning at full-resolution.
+	binning_full_res(*cmd);
 
 	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
 
-	auto t2 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-
-	// Merge coarse mask
-	cmd->set_program("assets://shaders/build_coarse_mask.comp");
-	cmd->set_storage_buffer(0, 0, *binning.mask_buffer);
-	cmd->set_storage_buffer(0, 1, *binning.mask_buffer_coarse);
-	cmd->push_constants(&num_masks, 0, sizeof(num_masks));
-	cmd->dispatch((num_masks + 63) / 64,
-	              (width + TILE_WIDTH - 1) / TILE_WIDTH,
-	              (height + TILE_HEIGHT - 1) / TILE_HEIGHT);
+	// Merge coarse mask.
+	// Run per-tile prefix sum.
+	build_coarse_mask(*cmd);
+	run_per_tile_prefix_sum(*cmd);
 
 	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
 
-	auto t3 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+	run_horiz_prefix_sum(*cmd);
 
-	// Rasterization
-	cmd->set_program("assets://shaders/rasterize.comp");
-	cmd->set_storage_buffer(0, 0, *staging.positions);
-	cmd->set_storage_buffer(0, 1, *staging.attributes);
-	cmd->set_storage_buffer(0, 2, *color_buffer);
-	cmd->set_storage_buffer(0, 3, *depth_buffer);
-	cmd->set_storage_buffer(0, 4, *binning.mask_buffer);
-	cmd->set_storage_buffer(0, 5, *binning.mask_buffer_coarse);
-	cmd->set_texture(1, 0, image->get_view());
-	cmd->dispatch((width + TILE_WIDTH - 1) / TILE_WIDTH, (height + TILE_HEIGHT - 1) / TILE_HEIGHT, 1);
+	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
 
-	auto t4 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+	// ROP.
+	run_rop(*cmd);
 
 	device.submit(cmd);
 	reset_staging();
-
-	device.wait_idle();
-
-	if (t0->is_signalled() && t1->is_signalled() && t2->is_signalled() && t3->is_signalled() && t4->is_signalled())
-	{
-		double time0 = t0->get_timestamp();
-		double time1 = t1->get_timestamp();
-		double time2 = t2->get_timestamp();
-		double time3 = t3->get_timestamp();
-		double time4 = t4->get_timestamp();
-		LOGI("Pre-binning time: %.6f ms\n", 1000.0 * (time1 - time0));
-		LOGI("Binning time: %.6f ms\n", 1000.0 * (time2 - time1));
-		LOGI("Merge coarse mask time: %.6f ms\n", 1000.0 * (time3 - time2));
-		LOGI("Rasterize time: %.6f ms\n", 1000.0 * (time4 - time3));
-	}
 }
 
 void RasterizerGPU::Impl::init_binning_buffers()
@@ -367,15 +418,15 @@ void RasterizerGPU::Impl::init_prefix_sum_buffers()
 	             VK_BUFFER_USAGE_TRANSFER_DST_BIT |
 	             VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 
-	info.size = MAX_TILES_X * MAX_TILES_Y * TILE_BINNING_STRIDE * sizeof(uint32_t);
+	info.size = MAX_TILES_X * MAX_TILES_Y * TILE_BINNING_STRIDE * sizeof(uint16_t);
 	tile_count.tile_prefix_sum = device.create_buffer(info);
 
-	info.size = MAX_TILES_X * MAX_TILES_Y * sizeof(uint32_t);
+	info.size = MAX_TILES_X * MAX_TILES_Y * sizeof(uint16_t);
 	tile_count.tile_total = device.create_buffer(info);
 	tile_count.horiz_prefix_sum = device.create_buffer(info);
 	tile_count.tile_offset = device.create_buffer(info);
 
-	info.size = MAX_TILES_Y * sizeof(uint32_t);
+	info.size = MAX_TILES_Y * sizeof(uint16_t);
 	tile_count.horiz_total = device.create_buffer(info);
 	tile_count.vert_prefix_sum = device.create_buffer(info);
 }

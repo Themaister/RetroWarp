@@ -1,0 +1,71 @@
+#version 450
+#extension GL_EXT_shader_16bit_storage : require
+layout(local_size_x = 64) in;
+
+#include "constants.h"
+#include "fb_info.h"
+
+layout(std430, set = 0, binding = 0) readonly buffer MaskBuffer
+{
+    uint mask_buffer[];
+};
+
+layout(std430, set = 0, binding = 1) writeonly buffer TilePrefixSum
+{
+    uint16_t tile_prefix_sums[];
+};
+
+layout(std430, set = 0, binding = 2) writeonly buffer TileTotals
+{
+    uint16_t tile_sums[];
+};
+
+shared uint shared_counts[gl_WorkGroupSize.x];
+
+void main()
+{
+    ivec2 tile = ivec2(gl_WorkGroupID.xy);
+    int linear_tile = tile.x + tile.y * MAX_TILES_X;
+    int base_offset = linear_tile * TILE_BINNING_STRIDE;
+
+    uint local_index = gl_LocalInvocationIndex;
+    uint num_masks = uint(fb_info.primitive_count_32);
+    uint total_primitives = 0u;
+
+    for (uint i = 0u; i < num_masks; i += gl_WorkGroupSize.x)
+    {
+        uint bit_count_orig = 0u;
+        uint primitive_index = base_offset + i + local_index;
+        if (primitive_index < num_masks)
+            bit_count_orig = uint(bitCount(mask_buffer[primitive_index]));
+
+        uint bit_count = bit_count_orig;
+        shared_counts[local_index] = bit_count;
+        barrier();
+
+        for (uint step = 2u; step <= gl_WorkGroupSize.x; step <<= 2u)
+        {
+            uint mask = step - 1u;
+            uint inv_mask = ~mask;
+            uint local_index_masked = local_index & mask;
+            uint local_index_inv_masked = local_index & inv_mask;
+            mask >>= 1u;
+            if (local_index_masked > mask)
+            {
+                uint src_index = local_index_inv_masked + mask;
+                bit_count += shared_counts[src_index];
+                shared_counts[local_index] = bit_count;
+            }
+            barrier();
+        }
+
+        if (primitive_index < num_masks)
+            tile_prefix_sums[primitive_index] = uint16_t(total_primitives + bit_count - bit_count_orig);
+        total_primitives += shared_counts[gl_WorkGroupSize.x - 1u];
+
+        barrier();
+    }
+
+    if (local_index == 0u)
+        tile_sums[linear_tile] = uint16_t(total_primitives);
+}
