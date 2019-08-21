@@ -74,12 +74,14 @@ struct RasterizerGPU::Impl
 	unsigned compute_num_conservative_tiles(const PrimitiveSetup &setup) const;
 };
 
-struct Registers
+struct FBInfo
 {
-	uvec2 resolution;
-	uint32_t primitive_count;
-	uint32_t fb_stride;
 	int32_t scissor_x, scissor_y, scissor_width, scissor_height;
+	uvec2 resolution;
+	uint32_t fb_stride;
+	uint32_t primitive_count;
+	uint32_t primitive_count_32;
+	uint32_t primitive_count_1024;
 };
 
 constexpr unsigned MAX_PRIMITIVES = 0x4000;
@@ -153,18 +155,22 @@ void RasterizerGPU::Impl::flush()
 	if (staging.count == 0)
 		return;
 
-	Registers reg = {};
-	reg.fb_stride = width;
-	reg.primitive_count = staging.count;
-	reg.resolution.x = width;
-	reg.resolution.y = height;
-	reg.scissor_x = 0;
-	reg.scissor_y = 0;
-	reg.scissor_width = width;
-	reg.scissor_height = height;
 
 	device.next_frame_context();
 	auto cmd = device.request_command_buffer();
+
+	auto *fb_info = cmd->allocate_typed_constant_data<FBInfo>(2, 0, 1);
+	fb_info->scissor_x = 0;
+	fb_info->scissor_y = 0;
+	fb_info->scissor_width = width;
+	fb_info->scissor_height = height;
+	fb_info->resolution.x = width;
+	fb_info->resolution.y = height;
+	fb_info->fb_stride = width;
+	fb_info->primitive_count = staging.count;
+	uint32_t num_masks = (staging.count + 31) / 32;
+	fb_info->primitive_count_32 = num_masks;
+	fb_info->primitive_count_1024 = (staging.count + 1023) / 1024;
 
 	auto t0 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 
@@ -172,7 +178,6 @@ void RasterizerGPU::Impl::flush()
 	cmd->set_program("assets://shaders/binning_low_res.comp");
 	cmd->set_storage_buffer(0, 0, *binning.mask_buffer_low_res);
 	cmd->set_storage_buffer(0, 1, *staging.positions);
-	cmd->push_constants(&reg, 0, sizeof(reg));
 	cmd->dispatch((staging.count + 63) / 64,
 	              (width + 4 * TILE_WIDTH - 1) / (4 * TILE_WIDTH),
 	              (height + 4 * TILE_HEIGHT - 1) / (4 * TILE_HEIGHT));
@@ -187,7 +192,6 @@ void RasterizerGPU::Impl::flush()
 	cmd->set_storage_buffer(0, 0, *binning.mask_buffer);
 	cmd->set_storage_buffer(0, 1, *staging.positions);
 	cmd->set_storage_buffer(0, 2, *binning.mask_buffer_low_res);
-	cmd->push_constants(&reg, 0, sizeof(reg));
 	cmd->dispatch((staging.count + 63) / 64,
 	              (width + TILE_WIDTH - 1) / TILE_WIDTH,
 	              (height + TILE_HEIGHT - 1) / TILE_HEIGHT);
@@ -201,7 +205,6 @@ void RasterizerGPU::Impl::flush()
 	cmd->set_program("assets://shaders/build_coarse_mask.comp");
 	cmd->set_storage_buffer(0, 0, *binning.mask_buffer);
 	cmd->set_storage_buffer(0, 1, *binning.mask_buffer_coarse);
-	uint32_t num_masks = (staging.count + 31) / 32;
 	cmd->push_constants(&num_masks, 0, sizeof(num_masks));
 	cmd->dispatch((num_masks + 63) / 64,
 	              (width + TILE_WIDTH - 1) / TILE_WIDTH,
@@ -221,8 +224,6 @@ void RasterizerGPU::Impl::flush()
 	cmd->set_storage_buffer(0, 4, *binning.mask_buffer);
 	cmd->set_storage_buffer(0, 5, *binning.mask_buffer_coarse);
 	cmd->set_texture(1, 0, image->get_view());
-
-	cmd->push_constants(&reg, 0, sizeof(reg));
 	cmd->dispatch((width + TILE_WIDTH - 1) / TILE_WIDTH, (height + TILE_HEIGHT - 1) / TILE_HEIGHT, 1);
 
 	auto t4 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);

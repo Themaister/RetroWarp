@@ -6,6 +6,7 @@ layout(local_size_x = 16, local_size_y = 16) in;
 
 #include "primitive_setup.h"
 #include "constants.h"
+#include "fb_info.h"
 
 layout(std430, set = 0, binding = 0) readonly buffer TriangleSetupPos
 {
@@ -38,14 +39,6 @@ layout(std430, set = 0, binding = 5) readonly buffer CoarseBinning
 };
 
 layout(set = 1, binding = 0) uniform utexture2D uTexture;
-
-layout(std430, push_constant) uniform Registers
-{
-    uvec2 resolution;
-    int primitive_count;
-    int fb_stride;
-    int scissor_x, scissor_y, scissor_width, scissor_height;
-} registers;
 
 int quant_w(int w)
 {
@@ -149,22 +142,22 @@ void emit_pixel(uvec4 color, uint z, inout uvec4 out_color, inout uint out_z)
 void main()
 {
     uvec2 coord = gl_GlobalInvocationID.xy;
-    if (any(greaterThanEqual(coord, registers.resolution)))
+    if (any(greaterThanEqual(coord, fb_info.resolution)))
         return;
 
     int x = int(coord.x);
     int y = int(coord.y);
     int y_sub = y << SUBPIXELS_LOG2;
 
-    uvec4 current_color = uvec4(color_data[y * registers.fb_stride + x]);
-    uint current_z = uint(depth_data[y * registers.fb_stride + x]);
+    uvec4 current_color = uvec4(color_data[y * fb_info.fb_stride + x]);
+    uint current_z = uint(depth_data[y * fb_info.fb_stride + x]);
 
     int tile_x = int(gl_WorkGroupID.x);
     int tile_y = int(gl_WorkGroupID.y);
     int linear_tile_base = (tile_y * MAX_TILES_X + tile_x) * TILE_BINNING_STRIDE;
     int linear_tile_base_coarse = (tile_y * MAX_TILES_X + tile_x) * TILE_BINNING_STRIDE_COARSE;
-    int primitive_mask_count = (registers.primitive_count + 31) >> 5;
-    int primitive_coarse_mask_count = (primitive_mask_count + 31) >> 5;
+    int primitive_mask_count = fb_info.primitive_count_32;
+    int primitive_coarse_mask_count = fb_info.primitive_count_1024;
 
     for (int coarse_mask_index = 0; coarse_mask_index < primitive_coarse_mask_count; coarse_mask_index++)
     {
@@ -191,10 +184,10 @@ void main()
                 int span_begin_y = (int(prim_pos.y_lo) + ((1 << SUBPIXELS_LOG2) - 1)) >> SUBPIXELS_LOG2;
                 int span_end_y = (int(prim_pos.y_hi) - 1) >> SUBPIXELS_LOG2;
 
-                if (span_begin_y < registers.scissor_y)
-                    span_begin_y = registers.scissor_y;
-                if (span_end_y >= registers.scissor_y + registers.scissor_height)
-                    span_end_y = registers.scissor_y + registers.scissor_height - 1;
+                if (span_begin_y < fb_info.scissor.y)
+                    span_begin_y = fb_info.scissor.y;
+                if (span_end_y >= fb_info.scissor.y + fb_info.scissor.w)
+                    span_end_y = fb_info.scissor.y + fb_info.scissor.w - 1;
 
                 if (y < span_begin_y || y > span_end_y)
                     continue;
@@ -221,10 +214,10 @@ void main()
                     end_x = (secondary_x - 1) >> (16 + SUBPIXELS_LOG2);
                 }
 
-                if (start_x < registers.scissor_x)
-                    start_x = registers.scissor_x;
-                if (end_x >= registers.scissor_x + registers.scissor_width)
-                    end_x = registers.scissor_x + registers.scissor_width - 1;
+                if (start_x < fb_info.scissor.x)
+                    start_x = fb_info.scissor.x;
+                if (end_x >= fb_info.scissor.x + fb_info.scissor.z)
+                    end_x = fb_info.scissor.x + fb_info.scissor.z - 1;
 
                 if (x < start_x || x > end_x)
                     continue;
@@ -264,6 +257,6 @@ void main()
         }
     }
 
-    color_data[y * registers.fb_stride + x] = u8vec4(current_color);
-    depth_data[y * registers.fb_stride + x] = uint16_t(current_z);
+    color_data[y * fb_info.fb_stride + x] = u8vec4(current_color);
+    depth_data[y * fb_info.fb_stride + x] = uint16_t(current_z);
 }

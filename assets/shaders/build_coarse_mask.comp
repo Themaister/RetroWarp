@@ -1,6 +1,7 @@
 #version 450
 layout(local_size_x = 64) in;
 #include "constants.h"
+#include "fb_info.h"
 
 layout(set = 0, binding = 0, std430) readonly buffer Mask
 {
@@ -12,11 +13,6 @@ layout(set = 0, binding = 1, std430) writeonly buffer CoarseMask
     uint coarse_mask[];
 };
 
-layout(std430, push_constant) uniform Registers
-{
-    int num_masks;
-} registers;
-
 shared uint merged_mask[2];
 
 void main()
@@ -27,7 +23,7 @@ void main()
 
     uint mask_index = gl_GlobalInvocationID.x;
     bool has_mask = false;
-    if (mask_index < registers.num_masks)
+    if (mask_index < fb_info.primitive_count_32)
         has_mask = mask[binned_bitmask_offset + mask_index] != 0u;
 
     // TODO: Subgroup ballot would be much nicer here.

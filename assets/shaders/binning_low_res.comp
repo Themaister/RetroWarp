@@ -5,6 +5,7 @@ layout(local_size_x = 64) in;
 
 #include "primitive_setup.h"
 #include "constants.h"
+#include "fb_info.h"
 
 layout(std430, set = 0, binding = 0) writeonly buffer TileBitmask
 {
@@ -15,14 +16,6 @@ layout(std430, set = 0, binding = 1) readonly buffer TriangleSetupPos
 {
     PrimitiveSetupPos primitives_pos[];
 };
-
-layout(std430, push_constant) uniform Registers
-{
-    uvec2 resolution;
-    int primitive_count;
-    int fb_stride;
-    int scissor_x, scissor_y, scissor_width, scissor_height;
-} registers;
 
 shared uint merged_mask[2];
 
@@ -103,13 +96,13 @@ void main()
 {
     ivec2 tile = ivec2(gl_WorkGroupID.yz);
     ivec2 base_coord = tile * ivec2(TILE_WIDTH * 4, TILE_HEIGHT * 4);
-    ivec2 end_coord = min(base_coord + ivec2(TILE_WIDTH * 4, TILE_HEIGHT * 4), ivec2(registers.resolution));
+    ivec2 end_coord = min(base_coord + ivec2(TILE_WIDTH * 4, TILE_HEIGHT * 4), ivec2(fb_info.resolution));
 
     int primitive_index = int(gl_GlobalInvocationID.x);
     uint local_index = gl_LocalInvocationIndex;
 
     bool bin_to_tile = false;
-    if (primitive_index < registers.primitive_count)
+    if (primitive_index < fb_info.primitive_count)
         bin_to_tile = bin_primitive(base_coord, end_coord, primitive_index);
 
     // TODO: Subgroup ballot would be much nicer here.

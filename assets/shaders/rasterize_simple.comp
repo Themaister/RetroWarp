@@ -6,6 +6,7 @@ layout(local_size_x = 16, local_size_y = 16) in;
 
 #include "primitive_setup.h"
 #include "constants.h"
+#include "fb_info.h"
 
 layout(std430, set = 0, binding = 0) readonly buffer TriangleSetupPos
 {
@@ -33,14 +34,6 @@ layout(std430, set = 0, binding = 4) readonly buffer Binning
 };
 
 layout(set = 1, binding = 0) uniform utexture2D uTexture;
-
-layout(std430, push_constant) uniform Registers
-{
-    uvec2 resolution;
-    int primitive_count;
-    int fb_stride;
-    int scissor_x, scissor_y, scissor_width, scissor_height;
-} registers;
 
 int quant_w(int w)
 {
