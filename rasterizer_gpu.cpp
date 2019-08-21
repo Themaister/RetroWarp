@@ -11,6 +11,11 @@ using namespace Vulkan;
 
 namespace RetroWarp
 {
+struct BBox
+{
+	int min_x, max_x, min_y, max_y;
+};
+
 struct RasterizerGPU::Impl
 {
 	Context context;
@@ -61,6 +66,11 @@ struct RasterizerGPU::Impl
 		unsigned num_conservative_tile_instances = 0;
 	} staging;
 
+	struct
+	{
+		int x, y, width, height;
+	} scissor;
+
 	void reset_staging();
 	void begin_staging();
 	void end_staging();
@@ -72,6 +82,9 @@ struct RasterizerGPU::Impl
 
 	void queue_primitive(const PrimitiveSetup &setup);
 	unsigned compute_num_conservative_tiles(const PrimitiveSetup &setup) const;
+
+	BBox compute_bbox(const PrimitiveSetup &setup) const;
+	bool clip_bbox_scissor(BBox &clipped_bbox, const BBox &bbox) const;
 };
 
 struct FBInfo
@@ -84,18 +97,21 @@ struct FBInfo
 	uint32_t primitive_count_1024;
 };
 
-constexpr unsigned MAX_PRIMITIVES = 0x4000;
-constexpr unsigned TILE_BINNING_STRIDE = MAX_PRIMITIVES / 32;
-constexpr unsigned TILE_BINNING_STRIDE_COARSE = TILE_BINNING_STRIDE / 32;
-constexpr unsigned MAX_WIDTH = 2048;
-constexpr unsigned MAX_HEIGHT = 2048;
-constexpr unsigned TILE_WIDTH = 16;
-constexpr unsigned TILE_HEIGHT = 16;
-constexpr unsigned MAX_TILES_X = MAX_WIDTH / TILE_WIDTH;
-constexpr unsigned MAX_TILES_Y = MAX_HEIGHT / TILE_HEIGHT;
-constexpr unsigned MAX_TILES_X_LOW_RES = MAX_WIDTH / (4 * TILE_WIDTH);
-constexpr unsigned MAX_TILES_Y_LOW_RES = MAX_HEIGHT / (4 * TILE_HEIGHT);
-constexpr unsigned MAX_NUM_TILE_INSTANCES = 0x10000;
+constexpr int MAX_PRIMITIVES = 0x4000;
+constexpr int TILE_BINNING_STRIDE = MAX_PRIMITIVES / 32;
+constexpr int TILE_BINNING_STRIDE_COARSE = TILE_BINNING_STRIDE / 32;
+constexpr int MAX_WIDTH = 2048;
+constexpr int MAX_HEIGHT = 2048;
+constexpr int TILE_WIDTH = 16;
+constexpr int TILE_HEIGHT = 16;
+constexpr int TILE_WIDTH_LOG2 = 4;
+constexpr int TILE_HEIGHT_LOG2 = 4;
+constexpr int MAX_TILES_X = MAX_WIDTH / TILE_WIDTH;
+constexpr int MAX_TILES_Y = MAX_HEIGHT / TILE_HEIGHT;
+constexpr int MAX_TILES_X_LOW_RES = MAX_WIDTH / (4 * TILE_WIDTH);
+constexpr int MAX_TILES_Y_LOW_RES = MAX_HEIGHT / (4 * TILE_HEIGHT);
+constexpr int MAX_NUM_TILE_INSTANCES = 0x10000;
+const int RASTER_ROUNDING = (1 << (SUBPIXELS_LOG2 + 16)) - 1;
 
 struct PerTileData
 {
@@ -114,9 +130,61 @@ void RasterizerGPU::Impl::reset_staging()
 	staging.num_conservative_tile_instances = 0;
 }
 
+BBox RasterizerGPU::Impl::compute_bbox(const PrimitiveSetup &setup) const
+{
+	int lo_x = std::numeric_limits<int>::max();
+	int hi_x = std::numeric_limits<int>::min();
+	int lo_y = std::numeric_limits<int>::max();
+	int hi_y = std::numeric_limits<int>::min();
+
+	lo_x = std::min(lo_x, setup.pos.x_a);
+	lo_x = std::min(lo_x, setup.pos.x_b);
+	lo_x = std::min(lo_x, setup.pos.x_c);
+	hi_x = std::max(hi_x, setup.pos.x_a);
+	hi_x = std::max(hi_x, setup.pos.x_b);
+	hi_x = std::max(hi_x, setup.pos.x_c);
+
+	int end_point_a = setup.pos.x_a + setup.pos.dxdy_a * (setup.pos.y_hi - setup.pos.y_lo);
+	int end_point_b = setup.pos.x_b + setup.pos.dxdy_b * (setup.pos.y_mid - setup.pos.y_lo);
+	int end_point_c = setup.pos.x_c + setup.pos.dxdy_c * (setup.pos.y_hi - setup.pos.y_mid);
+
+	lo_x = std::min(lo_x, end_point_a);
+	lo_x = std::min(lo_x, end_point_b);
+	lo_x = std::min(lo_x, end_point_c);
+	hi_x = std::max(hi_x, end_point_a);
+	hi_x = std::max(hi_x, end_point_b);
+	hi_x = std::max(hi_x, end_point_c);
+
+	BBox bbox = {};
+	bbox.min_x = (lo_x + RASTER_ROUNDING) >> (16 + SUBPIXELS_LOG2);
+	bbox.max_x = (hi_x - 1) >> (16 + SUBPIXELS_LOG2);
+	bbox.min_y = (setup.pos.y_lo + (1 << SUBPIXELS_LOG2) - 1) >> SUBPIXELS_LOG2;
+	bbox.max_y = (setup.pos.y_hi - 1) >> SUBPIXELS_LOG2;
+	return bbox;
+}
+
+bool RasterizerGPU::Impl::clip_bbox_scissor(BBox &clipped_bbox, const BBox &bbox) const
+{
+	clipped_bbox.min_x = std::max(scissor.x, bbox.min_x);
+	clipped_bbox.max_x = std::min(scissor.x + scissor.width - 1, bbox.max_x);
+	clipped_bbox.min_y = std::max(scissor.y, bbox.min_y);
+	clipped_bbox.max_y = std::min(scissor.y + scissor.height - 1, bbox.max_y);
+
+	return clipped_bbox.min_x <= clipped_bbox.max_x && clipped_bbox.min_y <= clipped_bbox.max_y;
+}
+
 unsigned RasterizerGPU::Impl::compute_num_conservative_tiles(const PrimitiveSetup &setup) const
 {
-	return 0;
+	auto bbox = compute_bbox(setup);
+	BBox clipped_bbox;
+	if (!clip_bbox_scissor(clipped_bbox, bbox))
+		return 0;
+
+	int start_tile_x = clipped_bbox.min_x >> TILE_WIDTH_LOG2;
+	int end_tile_x = clipped_bbox.max_x >> TILE_WIDTH_LOG2;
+	int start_tile_y = clipped_bbox.min_y >> TILE_HEIGHT_LOG2;
+	int end_tile_y = clipped_bbox.max_y >> TILE_HEIGHT_LOG2;
+	return (end_tile_x - start_tile_x + 1) * (end_tile_y - start_tile_y + 1);
 }
 
 void RasterizerGPU::Impl::begin_staging()
@@ -154,7 +222,6 @@ void RasterizerGPU::Impl::flush()
 	end_staging();
 	if (staging.count == 0)
 		return;
-
 
 	device.next_frame_context();
 	auto cmd = device.request_command_buffer();
