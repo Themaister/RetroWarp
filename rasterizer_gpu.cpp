@@ -54,7 +54,12 @@ struct RasterizerGPU::Impl
 		BufferHandle tile_offset;
 	} tile_count;
 
-	BufferHandle tile_instance_data;
+	struct
+	{
+		BufferHandle color;
+		BufferHandle depth;
+		BufferHandle flags;
+	} tile_instance_data;
 
 	struct
 	{
@@ -68,6 +73,12 @@ struct RasterizerGPU::Impl
 
 	struct
 	{
+		BufferHandle item_count_per_variant;
+		BufferHandle work_list_per_variant[16];
+	} raster_work;
+
+	struct
+	{
 		int x, y, width, height;
 	} scissor;
 
@@ -78,6 +89,7 @@ struct RasterizerGPU::Impl
 	void init_binning_buffers();
 	void init_prefix_sum_buffers();
 	void init_tile_buffers();
+	void init_raster_work_buffers();
 	void flush();
 
 	void queue_primitive(const PrimitiveSetup &setup);
@@ -118,6 +130,13 @@ struct PerTileData
 	uint32_t color;
 	uint16_t depth;
 	uint16_t flags;
+};
+
+struct TileRasterWork
+{
+	uint16_t tile_x, tile_y;
+	uint16_t tile_instance;
+	uint16_t primitive;
 };
 
 void RasterizerGPU::Impl::reset_staging()
@@ -204,6 +223,9 @@ void RasterizerGPU::Impl::begin_staging()
 	staging.mapped_attributes = static_cast<PrimitiveSetupAttr *>(
 			device.map_host_buffer(*staging.attributes,
 			                       MEMORY_ACCESS_WRITE_BIT));
+
+	staging.count = 0;
+	staging.num_conservative_tile_instances = 0;
 }
 
 void RasterizerGPU::Impl::end_staging()
@@ -240,6 +262,11 @@ void RasterizerGPU::Impl::flush()
 	fb_info->primitive_count_1024 = (staging.count + 1023) / 1024;
 
 	auto t0 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+
+	// Clear indirect buffer
+	cmd->set_program("assets://shaders/clear_indirect_buffers.comp");
+	cmd->set_storage_buffer(0, 0, *raster_work.item_count_per_variant);
+	cmd->dispatch(1, 1, 1);
 
 	// Binning low-res prepass
 	cmd->set_program("assets://shaders/binning_low_res.comp");
@@ -361,8 +388,28 @@ void RasterizerGPU::Impl::init_tile_buffers()
 	             VK_BUFFER_USAGE_TRANSFER_DST_BIT |
 	             VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 
-	info.size = MAX_NUM_TILE_INSTANCES * TILE_WIDTH * TILE_HEIGHT * sizeof(PerTileData);
-	tile_instance_data = device.create_buffer(info);
+	info.size = MAX_NUM_TILE_INSTANCES * TILE_WIDTH * TILE_HEIGHT * sizeof(uint32_t);
+	tile_instance_data.color = device.create_buffer(info);
+	info.size = MAX_NUM_TILE_INSTANCES * TILE_WIDTH * TILE_HEIGHT * sizeof(uint16_t);
+	tile_instance_data.depth = device.create_buffer(info);
+	info.size = MAX_NUM_TILE_INSTANCES * TILE_WIDTH * TILE_HEIGHT * sizeof(uint16_t);
+	tile_instance_data.flags = device.create_buffer(info);
+}
+
+void RasterizerGPU::Impl::init_raster_work_buffers()
+{
+	BufferCreateInfo info;
+	info.domain = BufferDomain::Device;
+	info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+	             VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+	             VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+
+	info.size = MAX_NUM_TILE_INSTANCES * sizeof(TileRasterWork);
+	for (auto &work_list : raster_work.work_list_per_variant)
+		work_list = device.create_buffer(info);
+
+	info.size = 16 * (4 * sizeof(uint32_t));
+	raster_work.item_count_per_variant = device.create_buffer(info);
 }
 
 RasterizerGPU::RasterizerGPU()
@@ -384,6 +431,7 @@ RasterizerGPU::RasterizerGPU()
 	impl->init_binning_buffers();
 	impl->init_prefix_sum_buffers();
 	impl->init_tile_buffers();
+	impl->init_raster_work_buffers();
 }
 
 RasterizerGPU::~RasterizerGPU()
