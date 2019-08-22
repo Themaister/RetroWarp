@@ -108,6 +108,7 @@ struct RasterizerGPU::Impl
 	void run_vert_prefix_sum(CommandBuffer &cmd);
 	void finalize_tile_offsets(CommandBuffer &cmd);
 	void distribute_combiner_work(CommandBuffer &cmd);
+	void dispatch_combiner_work(CommandBuffer &cmd);
 	void run_rop(CommandBuffer &cmd);
 
 	void test_prefix_sum();
@@ -348,6 +349,20 @@ void RasterizerGPU::Impl::distribute_combiner_work(CommandBuffer &cmd)
 	cmd.dispatch(num_tiles_x, num_tiles_y, 1);
 }
 
+void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
+{
+	cmd.set_program("assets://shaders/combiner.comp");
+	cmd.set_storage_buffer(0, 0, *raster_work.work_list_per_variant);
+	cmd.set_storage_buffer(0, 1, *tile_instance_data.color);
+	cmd.set_storage_buffer(0, 2, *tile_instance_data.depth);
+	cmd.set_storage_buffer(0, 3, *tile_instance_data.flags);
+	cmd.set_storage_buffer(0, 4, *staging.positions);
+	cmd.set_storage_buffer(0, 5, *staging.attributes);
+	cmd.set_texture(1, 0, image->get_view());
+
+	cmd.dispatch_indirect(*raster_work.item_count_per_variant, 0);
+}
+
 void RasterizerGPU::Impl::set_fb_info(CommandBuffer &cmd)
 {
 	auto *fb_info = cmd.allocate_typed_constant_data<FBInfo>(2, 0, 1);
@@ -434,6 +449,15 @@ void RasterizerGPU::Impl::flush()
 
 	// Distribute work.
 	distribute_combiner_work(*cmd);
+
+	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+	             VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+	             VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT);
+
+	dispatch_combiner_work(*cmd);
+
+	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
 
 	// ROP.
 	run_rop(*cmd);

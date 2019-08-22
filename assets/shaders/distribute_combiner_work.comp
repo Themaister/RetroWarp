@@ -32,7 +32,7 @@ struct TileRasterWork
     uint16_t primitive;
 };
 
-layout(std430, set = 0, binding = 4) buffer WorkList
+layout(std430, set = 0, binding = 4) writeonly buffer WorkList
 {
     u16vec4 tile_raster_work[];
 };
