@@ -552,12 +552,12 @@ void RasterizerGPU::Impl::test_prefix_sum()
 		}
 	}
 
-	cmd->fill_buffer(*tile_count.tile_prefix_sum, 0);
-	cmd->fill_buffer(*tile_count.tile_total, 0);
-	cmd->fill_buffer(*tile_count.horiz_total, 0);
-	cmd->fill_buffer(*tile_count.horiz_prefix_sum, 0);
-	cmd->fill_buffer(*tile_count.vert_prefix_sum, 0);
-	cmd->fill_buffer(*tile_count.tile_offset, 0);
+	cmd->fill_buffer(*tile_count.tile_prefix_sum, -1u);
+	cmd->fill_buffer(*tile_count.tile_total, -1u);
+	cmd->fill_buffer(*tile_count.horiz_total, -1u);
+	cmd->fill_buffer(*tile_count.horiz_prefix_sum, -1u);
+	cmd->fill_buffer(*tile_count.vert_prefix_sum, -1u);
+	cmd->fill_buffer(*tile_count.tile_offset, -1u);
 
 	cmd->barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
@@ -565,7 +565,6 @@ void RasterizerGPU::Impl::test_prefix_sum()
 	// Prefix sum.
 	run_per_tile_prefix_sum(*cmd);
 
-#if 0
 	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
 
@@ -587,7 +586,6 @@ void RasterizerGPU::Impl::test_prefix_sum()
 
 	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
-#endif
 
 	device.submit(cmd);
 
@@ -751,7 +749,8 @@ float RasterizerGPU::get_binning_ratio(size_t count)
 				else
 					assert((p_coarse[i >> 5] & (1u << (i & 31))) == 0);
 
-				unsigned mask_count = __builtin_popcount(mask);
+				//unsigned mask_count = __builtin_popcount(mask);
+				unsigned mask_count = 0;
 				total_count += mask_count;
 			}
 			max_count += count;

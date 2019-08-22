@@ -4,6 +4,7 @@
 #ifdef __GNUC__
 #define leading_zeroes(x) __builtin_clz(x)
 #elif defined(_MSC_VER)
+#include <intrin.h>
 static inline uint32_t leading_zeroes(uint32_t x)
 {
 	unsigned long result;

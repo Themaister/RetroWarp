@@ -7,7 +7,7 @@ layout(local_size_x = 64) in;
 
 layout(std430, set = 0, binding = 0) readonly buffer TileTotals
 {
-    uint16_t tile_sums[];
+    u16vec2 tile_sums[];
 };
 
 layout(std430, set = 0, binding = 1) writeonly buffer HorizPrefixSum
@@ -24,7 +24,7 @@ shared uint shared_counts[gl_WorkGroupSize.x];
 
 void main()
 {
-    uint y_offset = gl_WorkGroupID.y * uint(MAX_TILES_X);
+    uint y_offset = (gl_WorkGroupID.y * uint(MAX_TILES_X)) >> 1u;
     uint tile_x = gl_LocalInvocationIndex;
 
     uvec2 count_orig = uvec2(tile_sums[y_offset + tile_x]);
