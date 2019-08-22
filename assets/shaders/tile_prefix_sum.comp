@@ -35,15 +35,15 @@ void main()
     for (uint i = 0u; i < num_masks; i += gl_WorkGroupSize.x)
     {
         uint bit_count_orig = 0u;
-        uint primitive_index = base_offset + i + local_index;
+        uint primitive_index = i + local_index;
         if (primitive_index < num_masks)
-            bit_count_orig = uint(bitCount(mask_buffer[primitive_index]));
+            bit_count_orig = uint(bitCount(mask_buffer[primitive_index + base_offset]));
 
         uint bit_count = bit_count_orig;
         shared_counts[local_index] = bit_count;
         barrier();
 
-        for (uint step = 2u; step <= gl_WorkGroupSize.x; step <<= 2u)
+        for (uint step = 2u; step <= gl_WorkGroupSize.x; step <<= 1u)
         {
             uint mask = step - 1u;
             uint inv_mask = ~mask;
@@ -60,7 +60,7 @@ void main()
         }
 
         if (primitive_index < num_masks)
-            tile_prefix_sums[primitive_index] = uint16_t(total_primitives + bit_count - bit_count_orig);
+            tile_prefix_sums[primitive_index + base_offset] = uint16_t(total_primitives + bit_count - bit_count_orig);
         total_primitives += shared_counts[gl_WorkGroupSize.x - 1u];
 
         barrier();

@@ -26,13 +26,16 @@ void main()
 {
     uint y_offset = gl_WorkGroupID.y * uint(MAX_TILES_X);
     uint tile_x = gl_LocalInvocationIndex;
+
     uvec2 count_orig = uvec2(tile_sums[y_offset + tile_x]);
+    count_orig = mix(uvec2(0u), count_orig, lessThan(uvec2(2u * tile_x, 2u * tile_x + 1u), fb_info.resolution_tiles.xx));
+
     uvec2 count = count_orig;
     count.y += count.x;
     shared_counts[tile_x] = count.y;
     barrier();
 
-    for (uint step = 2u; step <= gl_WorkGroupSize.x; step <<= 2u)
+    for (uint step = 2u; step <= gl_WorkGroupSize.x; step <<= 1u)
     {
         uint mask = step - 1u;
         uint inv_mask = ~mask;
