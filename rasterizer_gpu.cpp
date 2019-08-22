@@ -105,6 +105,8 @@ struct RasterizerGPU::Impl
 	void build_coarse_mask(CommandBuffer &cmd);
 	void run_per_tile_prefix_sum(CommandBuffer &cmd);
 	void run_horiz_prefix_sum(CommandBuffer &cmd);
+	void run_vert_prefix_sum(CommandBuffer &cmd);
+	void finalize_tile_offsets(CommandBuffer &cmd);
 	void run_rop(CommandBuffer &cmd);
 };
 
@@ -315,6 +317,23 @@ void RasterizerGPU::Impl::run_horiz_prefix_sum(CommandBuffer &cmd)
 	cmd.dispatch(1, tiles_y, 1);
 }
 
+void RasterizerGPU::Impl::run_vert_prefix_sum(CommandBuffer &cmd)
+{
+	cmd.set_program("assets://shaders/vert_prefix_sum.comp");
+	cmd.set_storage_buffer(0, 0, *tile_count.horiz_total);
+	cmd.set_storage_buffer(0, 1, *tile_count.vert_prefix_sum);
+	cmd.dispatch(1, 1, 1);
+}
+
+void RasterizerGPU::Impl::finalize_tile_offsets(CommandBuffer &cmd)
+{
+	cmd.set_program("assets://shaders/finalize_tile_offsets.comp");
+	cmd.set_storage_buffer(0, 0, *tile_count.horiz_prefix_sum);
+	cmd.set_storage_buffer(0, 1, *tile_count.vert_prefix_sum);
+	cmd.set_storage_buffer(0, 2, *tile_count.tile_offset);
+	cmd.dispatch(MAX_TILES_X / 8, MAX_TILES_Y / 8, 1);
+}
+
 void RasterizerGPU::Impl::set_fb_info(CommandBuffer &cmd)
 {
 	auto *fb_info = cmd.allocate_typed_constant_data<FBInfo>(2, 0, 1);
@@ -374,13 +393,27 @@ void RasterizerGPU::Impl::flush()
 
 	// Merge coarse mask.
 	// Run per-tile prefix sum.
-	build_coarse_mask(*cmd);
 	run_per_tile_prefix_sum(*cmd);
 
 	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
 
+	// Run horizontal prefix sum.
 	run_horiz_prefix_sum(*cmd);
+
+	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+
+	// Run vertical prefix sum.
+	// This job is very small, so run coarse mask building in parallel to avoid starving GPU completely.
+	run_vert_prefix_sum(*cmd);
+	build_coarse_mask(*cmd);
+
+	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+
+	// Finalize offsets per tile.
+	finalize_tile_offsets(*cmd);
 
 	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);

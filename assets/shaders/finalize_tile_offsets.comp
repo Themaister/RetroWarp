@@ -1,0 +1,28 @@
+#version 450
+#extension GL_EXT_shader_16bit_storage : require
+layout(local_size_x = 8, local_size_y = 8) in;
+
+#include "constants.h"
+
+layout(std430, set = 0, binding = 0) readonly buffer HorizPrefixSum
+{
+    uint16_t horiz_prefix_sum[];
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer VertPrefixSum
+{
+    uint16_t vert_prefix_sum[];
+};
+
+layout(std430, set = 0, binding = 2) writeonly buffer FixedPrefixSum
+{
+    uint16_t total_offset[];
+};
+
+void main()
+{
+    ivec2 tile = ivec2(gl_GlobalInvocationID.xy);
+    uint horiz_offset = uint(horiz_prefix_sum[tile.y * MAX_TILES_X + tile.x]);
+    uint vert_offset = uint(vert_prefix_sum[tile.y]);
+    total_offset[tile.y * MAX_TILES_X + tile.x] = uint16_t(vert_offset + horiz_offset);
+}

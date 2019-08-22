@@ -1,0 +1,46 @@
+#version 450
+#extension GL_EXT_shader_16bit_storage : require
+layout(local_size_x = 64) in;
+
+#include "constants.h"
+#include "fb_info.h"
+
+layout(std430, set = 0, binding = 0) readonly buffer HorizTotal
+{
+    u16vec2 horiz_total[];
+};
+
+layout(std430, set = 0, binding = 1) writeonly buffer VertPrefixSum
+{
+    u16vec2 vert_prefix_sums[];
+};
+
+shared uint shared_counts[gl_WorkGroupSize.x];
+
+void main()
+{
+    uint tile_y = gl_LocalInvocationIndex;
+    uvec2 count_orig = uvec2(horiz_total[tile_y]);
+    uvec2 count = count_orig;
+    count.y += count.x;
+    shared_counts[tile_y] = count.y;
+    barrier();
+
+    for (uint step = 2u; step <= gl_WorkGroupSize.x; step <<= 2u)
+    {
+        uint mask = step - 1u;
+        uint inv_mask = ~mask;
+        uint local_index_masked = tile_y & mask;
+        uint local_index_inv_masked = tile_y & inv_mask;
+        mask >>= 1u;
+        if (local_index_masked > mask)
+        {
+            uint src_index = local_index_inv_masked + mask;
+            count += shared_counts[src_index];
+            shared_counts[tile_y] = count.y;
+        }
+        barrier();
+    }
+
+    vert_prefix_sums[tile_y] = u16vec2(count - count_orig);
+}
