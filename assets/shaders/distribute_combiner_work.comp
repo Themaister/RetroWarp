@@ -1,0 +1,69 @@
+#version 450
+#extension GL_EXT_shader_16bit_storage : require
+layout(local_size_x = 64) in;
+
+#include "constants.h"
+#include "fb_info.h"
+
+layout(std430, set = 0, binding = 0) readonly buffer TileOffsets
+{
+    uint16_t tile_offsets[];
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer TilePrefixSum
+{
+    uint16_t tile_prefix_sum[];
+};
+
+layout(std430, set = 0, binding = 2) readonly buffer MaskBuffer
+{
+    uint mask_buffer[];
+};
+
+layout(std430, set = 0, binding = 3) buffer IndirectBuffer
+{
+    uvec4 item_counts_per_variant[];
+};
+
+struct TileRasterWork
+{
+    uint16_t tile_x, tile_y;
+    uint16_t tile_instance;
+    uint16_t primitive;
+};
+
+layout(std430, set = 0, binding = 4) buffer WorkList
+{
+    u16vec4 tile_raster_work[];
+};
+
+void main()
+{
+    ivec2 tile = ivec2(gl_WorkGroupID.xy);
+    int linear_tile = tile.x + tile.y * MAX_TILES_X;
+    int base_offset = linear_tile * TILE_BINNING_STRIDE;
+
+    uint base_tile_instance_offset = uint(tile_prefix_sum[linear_tile]);
+    uint num_masks = uint(fb_info.primitive_count_32);
+
+    for (uint mask_index = gl_LocalInvocationIndex; mask_index < num_masks; mask_index += gl_WorkGroupSize.x)
+    {
+        uint mask = 0u;
+        if (mask_index < num_masks)
+            mask = mask_buffer[base_offset + mask_index];
+
+        uint orig_mask = mask;
+        uint tile_instance_offset = base_tile_instance_offset + uint(tile_prefix_sum[base_offset + mask_index]);
+
+        while (mask != 0u)
+        {
+            uint bit_index = uint(findLSB(mask));
+            mask &= ~(1u << bit_index);
+            uint primitive_index = mask_index * 32u + bit_index;
+
+            uint work_index = atomicAdd(item_counts_per_variant[0].x, 1u);
+            tile_raster_work[work_index] = u16vec4(uvec4(tile.x, tile.y, tile_instance_offset, primitive_index));
+            tile_instance_offset++;
+        }
+    }
+}

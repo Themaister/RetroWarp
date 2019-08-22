@@ -74,7 +74,7 @@ struct RasterizerGPU::Impl
 	struct
 	{
 		BufferHandle item_count_per_variant;
-		BufferHandle work_list_per_variant[16];
+		BufferHandle work_list_per_variant;
 	} raster_work;
 
 	struct
@@ -107,6 +107,7 @@ struct RasterizerGPU::Impl
 	void run_horiz_prefix_sum(CommandBuffer &cmd);
 	void run_vert_prefix_sum(CommandBuffer &cmd);
 	void finalize_tile_offsets(CommandBuffer &cmd);
+	void distribute_combiner_work(CommandBuffer &cmd);
 	void run_rop(CommandBuffer &cmd);
 
 	void test_prefix_sum();
@@ -333,6 +334,20 @@ void RasterizerGPU::Impl::finalize_tile_offsets(CommandBuffer &cmd)
 	cmd.dispatch(MAX_TILES_X / 8, MAX_TILES_Y / 8, 1);
 }
 
+void RasterizerGPU::Impl::distribute_combiner_work(CommandBuffer &cmd)
+{
+	cmd.set_program("assets://shaders/distribute_combiner_work.comp");
+	cmd.set_storage_buffer(0, 0, *tile_count.tile_offset);
+	cmd.set_storage_buffer(0, 1, *tile_count.tile_prefix_sum);
+	cmd.set_storage_buffer(0, 2, *binning.mask_buffer);
+	cmd.set_storage_buffer(0, 3, *raster_work.item_count_per_variant);
+	cmd.set_storage_buffer(0, 4, *raster_work.work_list_per_variant);
+
+	unsigned num_tiles_x = (width + TILE_WIDTH - 1) / TILE_WIDTH;
+	unsigned num_tiles_y = (height + TILE_HEIGHT - 1) / TILE_HEIGHT;
+	cmd.dispatch(num_tiles_x, num_tiles_y, 1);
+}
+
 void RasterizerGPU::Impl::set_fb_info(CommandBuffer &cmd)
 {
 	auto *fb_info = cmd.allocate_typed_constant_data<FBInfo>(2, 0, 1);
@@ -417,6 +432,9 @@ void RasterizerGPU::Impl::flush()
 	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
 
+	// Distribute work.
+	distribute_combiner_work(*cmd);
+
 	// ROP.
 	run_rop(*cmd);
 
@@ -487,9 +505,9 @@ void RasterizerGPU::Impl::init_raster_work_buffers()
 	             VK_BUFFER_USAGE_TRANSFER_DST_BIT |
 	             VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 
-	info.size = MAX_NUM_TILE_INSTANCES * sizeof(TileRasterWork);
-	for (auto &work_list : raster_work.work_list_per_variant)
-		work_list = device.create_buffer(info);
+	// Round MAX_NUM_TILE_INSTANCES up to 0x10000.
+	info.size = (MAX_NUM_TILE_INSTANCES + 1) * sizeof(TileRasterWork) * 16;
+	raster_work.work_list_per_variant = device.create_buffer(info);
 
 	info.size = 16 * (4 * sizeof(uint32_t));
 	raster_work.item_count_per_variant = device.create_buffer(info);
@@ -595,7 +613,8 @@ void RasterizerGPU::Impl::test_prefix_sum()
 	auto horiz_total = readback_buffer<uint16_t>(device, *tile_count.horiz_total);
 	auto vert_prefix_sum = readback_buffer<uint16_t>(device, *tile_count.vert_prefix_sum);
 	auto tile_offset = readback_buffer<uint16_t>(device, *tile_count.tile_offset);
-	;
+
+	reset_staging();
 }
 
 RasterizerGPU::RasterizerGPU()
