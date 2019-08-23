@@ -181,9 +181,9 @@ int main(int argc, char **argv)
 	}
 
 	Camera cam;
-	cam.look_at(vec3(0.0f, 0.04f, 0.04f), vec3(0.0f, 0.05f, 0.0f));
+	cam.look_at(vec3(0.0f, 0.0f, 2.0f), vec3(0.0f, 0.0f, 0.0f));
 	cam.set_fovy(0.3f * pi<float>());
-	cam.set_depth_range(0.001f, 1.0f);
+	cam.set_depth_range(0.1f, 100.0f);
 	cam.set_aspect(1280.0f / 720.0f);
 	mat4 mvp = cam.get_projection() * cam.get_view();
 
