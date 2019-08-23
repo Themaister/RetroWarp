@@ -49,7 +49,7 @@ static int32_t quantize_w(float w)
 
 static int32_t quantize_uv(float v)
 {
-	float rounded = std::round(v * float(1 << 8));
+	float rounded = std::round(v * float(1 << 12));
 	assert(rounded <= float(std::numeric_limits<int32_t>::max()));
 	return int32_t(rounded);
 }
@@ -395,11 +395,16 @@ static unsigned setup_clipped_triangles_clipped_w(PrimitiveSetup *setup, InputPr
 	for (auto w : ws)
 		min_w = std::min(min_w, w);
 
+#if 1
 	// Try to center UV coordinates close to 0 for better division precision.
 	float u_offset = floorf((1.0f / 3.0f) * (prim.vertices[0].u + prim.vertices[1].u + prim.vertices[2].u));
 	float v_offset = floorf((1.0f / 3.0f) * (prim.vertices[0].v + prim.vertices[1].v + prim.vertices[2].v));
 	prim.u_offset = int16_t(u_offset);
 	prim.v_offset = int16_t(v_offset);
+#else
+	prim.u_offset = 0;
+	prim.v_offset = 0;
+#endif
 
 	for (unsigned i = 0; i < 3; i++)
 	{

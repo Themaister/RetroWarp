@@ -17,7 +17,7 @@ static inline uint32_t leading_zeroes(uint32_t x)
 #error "Implement me."
 #endif
 
-enum { INVERSE_BITS = 4 };
+enum { INVERSE_BITS = 10 };
 static int32_t inverse_table[(1 << INVERSE_BITS) + 1];
 
 void setup_fixed_divider()

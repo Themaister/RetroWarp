@@ -38,7 +38,7 @@ add_library(rasterizer-gpu STATIC
         rasterizer_gpu.cpp rasterizer_gpu.hpp)
 target_link_libraries(rasterizer-gpu PRIVATE granite PUBLIC rasterizer)
 
-add_executable(test test.cpp)
+add_granite_application(test test.cpp)
 target_compile_options(test PRIVATE ${RETROWARP_CXX_FLAGS})
-target_link_libraries(test PRIVATE rasterizer-gpu granite stb)
+target_link_libraries(test PRIVATE rasterizer-gpu stb)
 target_compile_definitions(test PRIVATE ASSET_DIRECTORY=\"${CMAKE_CURRENT_SOURCE_DIR}/assets\")

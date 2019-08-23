@@ -109,10 +109,8 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 			int w = prim.attr.w + prim.attr.dwdx * dx + prim.attr.dwdy * dy;
 			int u = prim.attr.u + prim.attr.dudx * dx + prim.attr.dudy * dy;
 			int v = prim.attr.v + prim.attr.dvdx * dx + prim.attr.dvdy * dy;
-			u = wrap_uv(u);
-			v = wrap_uv(v);
-
-			w = (w + 8) >> 4;
+			//u = wrap_uv(u);
+			//v = wrap_uv(v);
 
 			unsigned uw = std::max(1, w);
 			int perspective_u = fixed_divider(u, uw, 9);

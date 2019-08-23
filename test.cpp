@@ -16,6 +16,9 @@
 #include "approximate_divider.hpp"
 #include "rasterizer_gpu.hpp"
 #include "os_filesystem.hpp"
+#include "scene_loader.hpp"
+#include "mesh_util.hpp"
+#include "application.hpp"
 
 using namespace RetroWarp;
 using namespace Granite;
@@ -28,16 +31,16 @@ struct TextureSampler : Sampler
 			u = 0;
 		if (v < 0)
 			v = 0;
-		if (unsigned(u) >= tex.get_layout().get_width())
-			u = tex.get_layout().get_width() - 1;
-		if (unsigned(v) >= tex.get_layout().get_height())
-			v = tex.get_layout().get_height() - 1;
+		if (unsigned(u) >= layout->get_width())
+			u = layout->get_width() - 1;
+		if (unsigned(v) >= layout->get_height())
+			v = layout->get_height() - 1;
 
-		auto *res = tex.get_layout().data_2d<u8vec4>(u, v);
+		auto *res = layout->data_2d<u8vec4>(u, v);
 		return { res->x, res->y, res->z, res->w };
 	}
 
-	SceneFormats::MemoryMappedTexture tex;
+	const Vulkan::TextureFormatLayout *layout = nullptr;
 };
 
 struct CanvasROP : ROP
@@ -49,6 +52,7 @@ struct CanvasROP : ROP
 	Canvas<uint16_t> depth_canvas;
 
 	void clear_depth(uint16_t z = 0xffff);
+	void clear_color(uint32_t c = 0);
 };
 
 void CanvasROP::clear_depth(uint16_t z)
@@ -56,6 +60,13 @@ void CanvasROP::clear_depth(uint16_t z)
 	for (unsigned y = 0; y < depth_canvas.get_height(); y++)
 		for (unsigned x = 0; x < depth_canvas.get_width(); x++)
 			depth_canvas.get(x, y) = z;
+}
+
+void CanvasROP::clear_color(uint32_t c)
+{
+	for (unsigned y = 0; y < canvas.get_height(); y++)
+		for (unsigned x = 0; x < canvas.get_width(); x++)
+			canvas.get(x, y) = c;
 }
 
 void CanvasROP::emit_pixel(int x, int y, uint16_t z, const Texel &texel)
@@ -84,175 +95,251 @@ void CanvasROP::fill_alpha_opaque()
 			canvas.get(x, y) |= 0xff000000u;
 }
 
-static void test_divider()
+struct SoftwareRenderableComponent : ComponentBase
 {
-	for (int32_t i = -0x10000; i <= 0x10000; i++)
-	{
-		int32_t res = fixed_divider(i, 1, 0);
-		if (res != i)
-			abort();
-	}
-
-	int32_t res = fixed_divider(4097 * 256, 1, 9);
-	assert(res == (4097 * 256) << 9);
-	res = fixed_divider(-4098 * 256, 1, 9);
-	assert(res == (-4098 * 256) << 9);
-}
-
-int main(int argc, char **argv)
-{
-	setup_fixed_divider();
-	test_divider();
-	if (argc != 2)
-		return EXIT_FAILURE;
-
-	Global::init();
-
-	GLTF::Parser parser(argv[1]);
-	const SceneFormats::Mesh *mesh = nullptr;
-	for (auto &node : parser.get_nodes())
-	{
-		if (!node.meshes.empty())
-		{
-			mesh = &parser.get_meshes()[node.meshes.front()];
-			break;
-		}
-	}
-
-	if (!mesh)
-	{
-		LOGE("No meshes.\n");
-		return EXIT_FAILURE;
-	}
-
+	GRANITE_COMPONENT_TYPE_DECL(SoftwareRenderableComponent)
 	std::vector<Vertex> vertices;
-	std::vector<InputPrimitive> input_primitives;
+	std::vector<Vertex> transformed_vertices;
+	std::vector<uvec3> indices;
+	SceneFormats::MemoryMappedTexture color_texture;
+};
 
-	unsigned num_vertices = mesh->positions.size() / mesh->position_stride;
-	vertices.resize(num_vertices);
-	auto pos_format = mesh->attribute_layout[Util::ecast(MeshAttribute::Position)].format;
-	auto normal_format = mesh->attribute_layout[Util::ecast(MeshAttribute::Normal)].format;
-	auto normal_offset = mesh->attribute_layout[Util::ecast(MeshAttribute::Normal)].offset;
+static void create_software_renderable(Entity *entity, RenderableComponent *renderable)
+{
+	auto *imported_mesh = dynamic_cast<ImportedMesh *>(renderable->renderable.get());
+	if (!imported_mesh)
+		return;
+
+	auto &mesh = imported_mesh->get_mesh();
+
+	if (mesh.topology != VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+	{
+		LOGE("Unsupported topology.\n");
+		return;
+	}
+
+	auto *sw = entity->allocate_component<SoftwareRenderableComponent>();
+
+	unsigned num_vertices = mesh.positions.size() / mesh.position_stride;
+	sw->vertices.resize(num_vertices);
+
+	auto pos_format = mesh.attribute_layout[Util::ecast(MeshAttribute::Position)].format;
+	auto normal_format = mesh.attribute_layout[Util::ecast(MeshAttribute::Normal)].format;
+	auto normal_offset = mesh.attribute_layout[Util::ecast(MeshAttribute::Normal)].offset;
 
 	for (unsigned i = 0; i < num_vertices; i++)
 	{
 		if (pos_format == VK_FORMAT_R32G32B32_SFLOAT)
 		{
-			memcpy(vertices[i].clip, mesh->positions.data() + i * mesh->position_stride, 3 * sizeof(float));
-			vertices[i].w = 1.0f;
+			memcpy(sw->vertices[i].clip, mesh.positions.data() + i * mesh.position_stride, 3 * sizeof(float));
+			sw->vertices[i].w = 1.0f;
 		}
 		else if (pos_format == VK_FORMAT_R32G32B32A32_SFLOAT)
-			memcpy(vertices[i].clip, mesh->positions.data() + i * mesh->position_stride, 4 * sizeof(float));
+			memcpy(sw->vertices[i].clip, mesh.positions.data() + i * mesh.position_stride, 4 * sizeof(float));
 		else
 		{
 			LOGE("Unknown position format.\n");
-			return EXIT_FAILURE;
+			entity->free_component<SoftwareRenderableComponent>();
+			return;
 		}
 
 		if (normal_format == VK_FORMAT_R32G32B32_SFLOAT)
 		{
 			vec3 n;
-			memcpy(n.data, mesh->attributes.data() + i * mesh->attribute_stride + normal_offset, 3 * sizeof(float));
-			float ndotl = clamp(dot(n, vec3(0.2f, 0.3f, 0.5f)) + 0.1f, 0.0f, 1.0f);
-			for (auto &c : vertices[i].color)
-				c = ndotl;
+			memcpy(n.data, mesh.attributes.data() + i * mesh.attribute_stride + normal_offset, 3 * sizeof(float));
+			n = normalize(n);
+			memcpy(sw->vertices[i].color, n.data, 3 * sizeof(float));
 		}
 		else
 		{
-			for (auto &c : vertices[i].color)
+			for (auto &c : sw->vertices[i].color)
 				c = 1.0f;
 		}
 	}
 
-	auto &mat = parser.get_materials()[mesh->material_index];
-	TextureSampler sampler;
-	sampler.tex = load_texture_from_file(mat.base_color.path);
+	auto &mat = imported_mesh->get_material_info();
+	sw->color_texture = load_texture_from_file(mat.base_color.path);
 
-	if (mesh->attribute_layout[Util::ecast(MeshAttribute::UV)].format == VK_FORMAT_R32G32_SFLOAT)
+	if (mesh.attribute_layout[Util::ecast(MeshAttribute::UV)].format == VK_FORMAT_R32G32_SFLOAT)
 	{
-		auto offset = mesh->attribute_layout[Util::ecast(MeshAttribute::UV)].offset;
+		auto offset = mesh.attribute_layout[Util::ecast(MeshAttribute::UV)].offset;
 		for (unsigned i = 0; i < num_vertices; i++)
 		{
-			memcpy(&vertices[i].u, mesh->attributes.data() + i * mesh->attribute_stride + offset, sizeof(float));
-			memcpy(&vertices[i].v, mesh->attributes.data() + i * mesh->attribute_stride + offset + sizeof(float), sizeof(float));
-			vertices[i].u = vertices[i].u * float(sampler.tex.get_layout().get_width());
-			vertices[i].v = vertices[i].v * float(sampler.tex.get_layout().get_height());
+			memcpy(&sw->vertices[i].u, mesh.attributes.data() + i * mesh.attribute_stride + offset, sizeof(float));
+			memcpy(&sw->vertices[i].v, mesh.attributes.data() + i * mesh.attribute_stride + offset + sizeof(float), sizeof(float));
+			sw->vertices[i].u = sw->vertices[i].u * float(sw->color_texture.get_layout().get_width());
+			sw->vertices[i].v = sw->vertices[i].v * float(sw->color_texture.get_layout().get_height());
 		}
 	}
 
-	Camera cam;
-	cam.look_at(vec3(0.0f, 0.0f, 2.0f), vec3(0.0f, 0.0f, 0.0f));
-	cam.set_fovy(0.3f * pi<float>());
-	cam.set_depth_range(0.1f, 100.0f);
-	cam.set_aspect(1280.0f / 720.0f);
-	mat4 mvp = cam.get_projection() * cam.get_view();
-
-	for (unsigned i = 0; i < num_vertices; i++)
+	sw->indices.reserve(mesh.count / 3);
+	if (!mesh.indices.empty())
 	{
-		vec4 v;
-		memcpy(v.data, vertices[i].clip, sizeof(vec4));
-		v = mvp * v;
-		memcpy(vertices[i].clip, v.data, sizeof(vec4));
-	}
-
-	if (mesh->topology != VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
-	{
-		LOGE("Unsupported topology.\n");
-		return EXIT_FAILURE;
-	}
-
-	if (!mesh->indices.empty())
-	{
-		if (mesh->index_type == VK_INDEX_TYPE_UINT16)
+		if (mesh.index_type == VK_INDEX_TYPE_UINT16)
 		{
-			auto *indices = reinterpret_cast<const uint16_t *>(mesh->indices.data());
-			for (unsigned i = 0; i < mesh->count; i += 3)
-			{
-				InputPrimitive prim;
-				prim.vertices[0] = vertices[indices[i + 0]];
-				prim.vertices[1] = vertices[indices[i + 1]];
-				prim.vertices[2] = vertices[indices[i + 2]];
-				input_primitives.push_back(prim);
-			}
+			auto *indices = reinterpret_cast<const uint16_t *>(mesh.indices.data());
+			for (unsigned i = 0; i < mesh.count; i += 3)
+				sw->indices.push_back(uvec3(indices[i + 0], indices[i + 1], indices[i + 2]));
 		}
-		else if (mesh->index_type == VK_INDEX_TYPE_UINT32)
+		else if (mesh.index_type == VK_INDEX_TYPE_UINT32)
 		{
-			auto *indices = reinterpret_cast<const uint32_t *>(mesh->indices.data());
-			for (unsigned i = 0; i < mesh->count; i += 3)
-			{
-				InputPrimitive prim;
-				prim.vertices[0] = vertices[indices[i + 0]];
-				prim.vertices[1] = vertices[indices[i + 1]];
-				prim.vertices[2] = vertices[indices[i + 2]];
-				input_primitives.push_back(prim);
-			}
+			auto *indices = reinterpret_cast<const uint32_t *>(mesh.indices.data());
+			for (unsigned i = 0; i < mesh.count; i += 3)
+				sw->indices.push_back(uvec3(indices[i + 0], indices[i + 1], indices[i + 2]));
+		}
+		else
+		{
+			LOGE("Unknown index type.\n");
+			entity->free_component<SoftwareRenderableComponent>();
+			return;
 		}
 	}
 	else
 	{
-		for (unsigned i = 0; i < mesh->count; i += 3)
-		{
-			InputPrimitive prim;
-			prim.vertices[0] = vertices[i + 0];
-			prim.vertices[1] = vertices[i + 1];
-			prim.vertices[2] = vertices[i + 2];
-			input_primitives.push_back(prim);
-		}
+		for (unsigned i = 0; i < mesh.count; i += 3)
+			sw->indices.push_back(uvec3(i, i + 1, i + 2));
 	}
 
+	sw->transformed_vertices = sw->vertices;
+}
+
+struct SWRenderApplication : Application
+{
+	explicit SWRenderApplication(const char *path);
+	void render_frame(double, double) override;
+
+	SceneLoader loader;
 	CanvasROP rop;
 	RasterizerCPU rasterizer;
+	FPSCamera cam;
+};
+
+SWRenderApplication::SWRenderApplication(const char *path)
+{
+	loader.load_scene(path);
+
+	auto &scene = loader.get_scene();
+	auto *renderables_holder = scene.get_entity_pool().get_component_group_holder<RenderableComponent, OpaqueComponent, RenderInfoComponent>();
+	auto &renderables = renderables_holder->get_groups();
+	auto &renderable_entities = renderables_holder->get_entities();
+
+	for (size_t i = 0; i < renderables.size(); i++)
+		create_software_renderable(renderable_entities[i], get_component<RenderableComponent>(renderables[i]));
+
+	cam.set_fovy(0.5f * pi<float>());
+	cam.set_depth_range(0.1f, 100.0f);
+	cam.set_aspect(640.0f / 360.0f);
+	cam.look_at(vec3(0.0f, 0.0f, 3.0f), vec3(0.0f));
+
 	rop.canvas.resize(640, 360);
 	rop.depth_canvas.resize(640, 360);
 	rasterizer.set_scissor(0, 0, 640, 360);
-	rasterizer.set_sampler(&sampler);
 	rasterizer.set_rop(&rop);
+}
+
+static void transform_vertex(Vertex &out_vertex, const Vertex &in_vertex, const mat4 &mvp, const mat3 &normal_matrix)
+{
+	vec3 n = vec3(in_vertex.color[0], in_vertex.color[1], in_vertex.color[2]);
+	n = normalize(normal_matrix * n);
+	float ndotl = dot(n, vec3(0.6f, 0.8f, 0.4f)) + 0.2f;
+	ndotl = clamp(ndotl, 0.0f, 1.0f);
+
+	vec4 pos = vec4(in_vertex.x, in_vertex.y, in_vertex.z, 1.0f);
+	vec4 clip = mvp * pos;
+	out_vertex.color[0] = ndotl;
+	out_vertex.color[1] = ndotl;
+	out_vertex.color[2] = ndotl;
+	out_vertex.color[3] = 1.0f;
+	memcpy(out_vertex.clip, clip.data, 4 * sizeof(float));
+}
+
+void SWRenderApplication::render_frame(double, double)
+{
+	auto &device = get_wsi().get_device();
+	auto &scene = loader.get_scene();
+	scene.update_cached_transforms();
+
+	rop.clear_color();
 	rop.clear_depth();
 
-	ViewportTransform vp = { 0.0f, 0.0f, 640.0f, 360.0f, 0.0f, 1.0f };
-	PrimitiveSetup setup[256];
+	mat4 vp = cam.get_projection() * cam.get_view();
+	ViewportTransform viewport_transform = { -0.5f, -0.5f, 640.0f, 360.0f, 0.0f, 1.0f };
+	InputPrimitive input = {};
+	PrimitiveSetup setups[256];
+	TextureSampler sampler;
+	rasterizer.set_sampler(&sampler);
 
-	std::vector<PrimitiveSetup> setups;
+	auto &renderables = scene.get_entity_pool().get_component_group<SoftwareRenderableComponent, RenderInfoComponent>();
+	for (auto &renderable : renderables)
+	{
+		auto &m = get_component<RenderInfoComponent>(renderable)->transform->world_transform;
+		mat4 mvp = vp * m;
+		mat3 n = mat3(m);
+		auto *sw = get_component<SoftwareRenderableComponent>(renderable);
+		sampler.layout = &sw->color_texture.get_layout();
+
+		size_t vertex_count = sw->vertices.size();
+		for (size_t i = 0; i < vertex_count; i++)
+			transform_vertex(sw->transformed_vertices[i], sw->vertices[i], mvp, n);
+
+		for (auto &primitive : sw->indices)
+		{
+			input.vertices[0] = sw->transformed_vertices[primitive.x];
+			input.vertices[1] = sw->transformed_vertices[primitive.y];
+			input.vertices[2] = sw->transformed_vertices[primitive.z];
+			unsigned count = setup_clipped_triangles(setups, input, CullMode::CCWOnly, viewport_transform);
+			for (unsigned i = 0; i < count; i++)
+				rasterizer.render_primitive(setups[i]);
+		}
+	}
+
+	rop.fill_alpha_opaque();
+
+	auto info = Vulkan::ImageCreateInfo::immutable_2d_image(rop.canvas.get_width(), rop.canvas.get_height(), VK_FORMAT_R8G8B8A8_SRGB);
+	Vulkan::ImageInitialData initial = {};
+	initial.data = rop.canvas.get_data();
+	auto image = device.create_image(info, &initial);
+
+	auto cmd = device.request_command_buffer();
+	cmd->begin_render_pass(device.get_swapchain_render_pass(Vulkan::SwapchainRenderPass::ColorOnly));
+	cmd->set_texture(0, 0, image->get_view(), Vulkan::StockSampler::LinearClamp);
+	Vulkan::CommandBufferUtil::draw_fullscreen_quad(*cmd, "builtin://shaders/quad.vert", "builtin://shaders/blit.frag");
+	cmd->end_render_pass();
+	device.submit(cmd);
+}
+
+namespace Granite
+{
+Application *application_create(int argc, char **argv)
+{
+	setup_fixed_divider();
+	if (argc != 2)
+		return nullptr;
+
+	Global::filesystem()->register_protocol("assets", std::make_unique<OSFilesystem>(ASSET_DIRECTORY));
+	return new SWRenderApplication(argv[1]);
+}
+}
+
+#if 0
+int main(int argc, char **argv)
+{
+
+	Global::init();
+
+	SceneLoader loader;
+	loader.load_scene(argv[1]);
+
+	auto &scene = loader.get_scene();
+	auto *renderables_holder = scene.get_entity_pool().get_component_group_holder<RenderableComponent, RenderInfoComponent>();
+	auto &renderables = renderables_holder->get_groups();
+	auto &renderable_entities = renderables_holder->get_entities();
+
+	for (size_t i = 0; i < renderables.size(); i++)
+		create_software_renderable(renderable_entities[i], get_component<RenderableComponent>(renderables[i]));
+
+	ViewportTransform vp = { 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f };
+	PrimitiveSetup setup[256];
 
 	for (auto &prim : input_primitives)
 	{
@@ -261,17 +348,15 @@ int main(int argc, char **argv)
 		for (unsigned i = 0; i < count; i++)
 		{
 			rasterizer.render_primitive(setup[i]);
-			setups.push_back(setup[i]);
 		}
 	}
 
-	rop.fill_alpha_opaque();
 	rop.save_canvas("/tmp/test.png");
 
-	Global::filesystem()->register_protocol("assets", std::make_unique<OSFilesystem>(ASSET_DIRECTORY));
 
+#if 0
 	RasterizerGPU gpu;
-	gpu.resize(640, 360);
+	gpu.resize(1920, 1080);
 	gpu.upload_texture(sampler.tex.get_layout());
 	gpu.clear_color(0);
 	gpu.clear_depth();
@@ -279,4 +364,6 @@ int main(int argc, char **argv)
 	gpu.save_canvas("/tmp/test_gpu.png");
 	float ratio = gpu.get_binning_ratio(setups.size());
 	LOGI("Binning ratio: %f %%\n", 100.0f * ratio);
+#endif
 }
+#endif
