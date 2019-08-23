@@ -43,7 +43,7 @@ void main()
     int linear_tile = tile.x + tile.y * MAX_TILES_X;
     int base_offset = linear_tile * TILE_BINNING_STRIDE;
 
-    uint base_tile_instance_offset = uint(tile_prefix_sum[linear_tile]);
+    uint base_tile_instance_offset = uint(tile_offsets[linear_tile]);
     uint num_masks = uint(fb_info.primitive_count_32);
 
     for (uint mask_index = gl_LocalInvocationIndex; mask_index < num_masks; mask_index += gl_WorkGroupSize.x)

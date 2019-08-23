@@ -629,6 +629,9 @@ void RasterizerGPU::Impl::test_prefix_sum()
 	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
 
+	// Distribute work.
+	distribute_combiner_work(*cmd);
+
 	device.submit(cmd);
 
 	auto tile_prefix_sum = readback_buffer<uint16_t>(device, *tile_count.tile_prefix_sum);
@@ -637,6 +640,9 @@ void RasterizerGPU::Impl::test_prefix_sum()
 	auto horiz_total = readback_buffer<uint16_t>(device, *tile_count.horiz_total);
 	auto vert_prefix_sum = readback_buffer<uint16_t>(device, *tile_count.vert_prefix_sum);
 	auto tile_offset = readback_buffer<uint16_t>(device, *tile_count.tile_offset);
+
+	auto item_counts = readback_buffer<uvec4>(device, *raster_work.item_count_per_variant);
+	auto work_list = readback_buffer<u16vec4>(device, *raster_work.work_list_per_variant);
 
 	reset_staging();
 }
