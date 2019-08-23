@@ -5,6 +5,7 @@
 #include "primitive_setup.hpp"
 #include "texture_format.hpp"
 #include <memory>
+#include "device.hpp"
 
 namespace RetroWarp
 {
@@ -13,6 +14,8 @@ class RasterizerGPU
 public:
 	RasterizerGPU();
 	~RasterizerGPU();
+
+	void init(Vulkan::Device &device);
 
 	void resize(unsigned width, unsigned height);
 	void clear_depth(uint16_t z = 0xffff);
@@ -23,6 +26,7 @@ public:
 	void upload_texture(const Vulkan::TextureFormatLayout &layout);
 
 	float get_binning_ratio(size_t count);
+	Vulkan::ImageHandle copy_to_framebuffer();
 
 private:
 	struct Impl;

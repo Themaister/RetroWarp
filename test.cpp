@@ -203,7 +203,7 @@ static void create_software_renderable(Entity *entity, RenderableComponent *rend
 	sw->transformed_vertices = sw->vertices;
 }
 
-struct SWRenderApplication : Application
+struct SWRenderApplication : Application, EventHandler
 {
 	explicit SWRenderApplication(const char *path);
 	void render_frame(double, double) override;
@@ -212,7 +212,21 @@ struct SWRenderApplication : Application
 	CanvasROP rop;
 	RasterizerCPU rasterizer;
 	FPSCamera cam;
+	RasterizerGPU rasterizer_gpu;
+
+	void on_device_created(const Vulkan::DeviceCreatedEvent &e);
+	void on_device_destroyed(const Vulkan::DeviceCreatedEvent &);
 };
+
+void SWRenderApplication::on_device_created(const Vulkan::DeviceCreatedEvent& e)
+{
+	rasterizer_gpu.init(e.get_device());
+	rasterizer_gpu.resize(1280, 720);
+}
+
+void SWRenderApplication::on_device_destroyed(const Vulkan::DeviceCreatedEvent &)
+{
+}
 
 SWRenderApplication::SWRenderApplication(const char *path)
 {
@@ -226,23 +240,24 @@ SWRenderApplication::SWRenderApplication(const char *path)
 	for (size_t i = 0; i < renderables.size(); i++)
 		create_software_renderable(renderable_entities[i], get_component<RenderableComponent>(renderables[i]));
 
-	cam.set_fovy(0.5f * pi<float>());
+	cam.set_fovy(0.4f * pi<float>());
 	cam.set_depth_range(0.1f, 100.0f);
 	cam.set_aspect(640.0f / 360.0f);
 	cam.look_at(vec3(0.0f, 0.0f, 3.0f), vec3(0.0f));
 
-	rop.canvas.resize(640, 360);
-	rop.depth_canvas.resize(640, 360);
-	rasterizer.set_scissor(0, 0, 640, 360);
+	rop.canvas.resize(1280, 720);
+	rop.depth_canvas.resize(1280, 720);
+	rasterizer.set_scissor(0, 0, 1280, 720);
 	rasterizer.set_rop(&rop);
+
+	EVENT_MANAGER_REGISTER_LATCH(SWRenderApplication, on_device_created, on_device_destroyed, Vulkan::DeviceCreatedEvent);
 }
 
 static void transform_vertex(Vertex &out_vertex, const Vertex &in_vertex, const mat4 &mvp, const mat3 &normal_matrix)
 {
 	vec3 n = vec3(in_vertex.color[0], in_vertex.color[1], in_vertex.color[2]);
 	n = normalize(normal_matrix * n);
-	float ndotl = dot(n, vec3(0.6f, 0.8f, 0.4f)) + 0.2f;
-	ndotl = clamp(ndotl, 0.0f, 1.0f);
+	float ndotl = clamp(dot(n, vec3(0.6f, 0.8f, 0.4f)), 0.0f, 1.0f) * 0.9f + 0.1f;
 
 	vec4 pos = vec4(in_vertex.x, in_vertex.y, in_vertex.z, 1.0f);
 	vec4 clip = mvp * pos;
@@ -261,9 +276,11 @@ void SWRenderApplication::render_frame(double, double)
 
 	rop.clear_color();
 	rop.clear_depth();
+	rasterizer_gpu.clear_color(0);
+	rasterizer_gpu.clear_depth();
 
 	mat4 vp = cam.get_projection() * cam.get_view();
-	ViewportTransform viewport_transform = { -0.5f, -0.5f, 640.0f, 360.0f, 0.0f, 1.0f };
+	ViewportTransform viewport_transform = { -0.5f, -0.5f, 1280.0f, 720.0f, 0.0f, 1.0f };
 	InputPrimitive input = {};
 	PrimitiveSetup setups[256];
 	TextureSampler sampler;
@@ -278,6 +295,8 @@ void SWRenderApplication::render_frame(double, double)
 		auto *sw = get_component<SoftwareRenderableComponent>(renderable);
 		sampler.layout = &sw->color_texture.get_layout();
 
+		rasterizer_gpu.upload_texture(sw->color_texture.get_layout());
+
 		size_t vertex_count = sw->vertices.size();
 		for (size_t i = 0; i < vertex_count; i++)
 			transform_vertex(sw->transformed_vertices[i], sw->vertices[i], mvp, n);
@@ -288,21 +307,46 @@ void SWRenderApplication::render_frame(double, double)
 			input.vertices[1] = sw->transformed_vertices[primitive.y];
 			input.vertices[2] = sw->transformed_vertices[primitive.z];
 			unsigned count = setup_clipped_triangles(setups, input, CullMode::CCWOnly, viewport_transform);
-			for (unsigned i = 0; i < count; i++)
-				rasterizer.render_primitive(setups[i]);
+			//for (unsigned i = 0; i < count; i++)
+			//	rasterizer.render_primitive(setups[i]);
+			rasterizer_gpu.rasterize_primitives(setups, count);
 		}
 	}
 
-	rop.fill_alpha_opaque();
+	//rop.fill_alpha_opaque();
 
+#if 0
+	InputPrimitive prim = {};
+	prim.vertices[0].x = -0.5f;
+	prim.vertices[0].y = -0.5f;
+	prim.vertices[1].x = -0.5f;
+	prim.vertices[1].y = +0.5f;
+	prim.vertices[2].x = +0.5f;
+	prim.vertices[2].y = -0.5f;
+	prim.vertices[0].w = 1.0f;
+	prim.vertices[1].w = 1.0f;
+	prim.vertices[2].w = 1.0f;
+	prim.vertices[2].u = 400.0f;
+	prim.vertices[1].v = 400.0f;
+	prim.vertices[0].color[0] = 1.0f;
+	prim.vertices[1].color[2] = 1.0f;
+	prim.vertices[2].color[2] = 1.0f;
+	unsigned count = setup_clipped_triangles(setups, prim, CullMode::CCWOnly, viewport_transform);
+	rasterizer_gpu.rasterize_primitives(setups, count);
+#endif
+
+#if 0
 	auto info = Vulkan::ImageCreateInfo::immutable_2d_image(rop.canvas.get_width(), rop.canvas.get_height(), VK_FORMAT_R8G8B8A8_SRGB);
 	Vulkan::ImageInitialData initial = {};
 	initial.data = rop.canvas.get_data();
 	auto image = device.create_image(info, &initial);
+#endif
+
+	auto image_gpu = rasterizer_gpu.copy_to_framebuffer();
 
 	auto cmd = device.request_command_buffer();
 	cmd->begin_render_pass(device.get_swapchain_render_pass(Vulkan::SwapchainRenderPass::ColorOnly));
-	cmd->set_texture(0, 0, image->get_view(), Vulkan::StockSampler::LinearClamp);
+	cmd->set_texture(0, 0, image_gpu->get_view(), Vulkan::StockSampler::LinearClamp);
 	Vulkan::CommandBufferUtil::draw_fullscreen_quad(*cmd, "builtin://shaders/quad.vert", "builtin://shaders/blit.frag");
 	cmd->end_render_pass();
 	device.submit(cmd);

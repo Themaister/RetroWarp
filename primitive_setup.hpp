@@ -25,18 +25,19 @@ struct PrimitiveSetupPos
 
 struct PrimitiveSetupAttr
 {
-	int32_t u, v, z, w;
-	int32_t dudx, dvdx, dzdx, dwdx;
-	int32_t dudy, dvdy, dzdy, dwdy;
+	float u_a, u_b, u_c;
+	uint8_t color_a[4];
+	float v_a, v_b, v_c;
+	uint8_t color_b[4];
+	float w_a, w_b, w_c;
+	uint8_t color_c[4];
 
-	int32_t color[4];
-	int32_t dcolor_dx[4];
-	int32_t dcolor_dy[4];
+	float z, dzdx, dzdy;
+	float djdx, dkdx;
+	float djdy, dkdy;
 
 	int16_t u_offset;
 	int16_t v_offset;
-
-	uint32_t padding[3];
 };
 
 struct PrimitiveSetup

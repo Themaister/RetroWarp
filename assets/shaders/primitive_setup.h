@@ -10,13 +10,16 @@ struct PrimitiveSetupPos
 
 struct PrimitiveSetupAttr
 {
-	ivec4 uvzw;
-	ivec4 duvzw_dx;
-	ivec4 duvzw_dy;
+	vec3 u;
+	u8vec4 color_a;
+	vec3 v;
+	u8vec4 color_b;
+	vec3 w;
+	u8vec4 color_c;
 
-	ivec4 color;
-	ivec4 dcolor_dx;
-	ivec4 dcolor_dy;
+	float z, dzdx, dzdy;
+	float djdx, dkdx;
+	float djdy, dkdy;
 
 	i16vec2 uv_offset;
 };

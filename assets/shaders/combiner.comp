@@ -197,9 +197,9 @@ void main()
     }
 
     if (start_x < fb_info.scissor.x)
-    start_x = fb_info.scissor.x;
+        start_x = fb_info.scissor.x;
     if (end_x >= fb_info.scissor.x + fb_info.scissor.z)
-    end_x = fb_info.scissor.x + fb_info.scissor.z - 1;
+        end_x = fb_info.scissor.x + fb_info.scissor.z - 1;
 
     if (x < start_x || x > end_x)
     {
@@ -208,18 +208,28 @@ void main()
     }
 
     // We've passed the rasterization test. Interpolate colors, Z, 1/W.
-    int dy = y_sub - interpolation_base_y;
-    int dx = (x << SUBPIXELS_LOG2) - interpolation_base_x;
+    float dy = float(y_sub - interpolation_base_y);
+    float dx = float((x << SUBPIXELS_LOG2) - interpolation_base_x);
 
-    ivec4 rgba = prim_attr.color + prim_attr.dcolor_dx * dx + prim_attr.dcolor_dy * dy;
-    uvec4 urgba = uvec4(clamp((rgba + 0x80) >> 8, ivec4(0), ivec4(0xff)));
+    uint z = uint(clamp(round(float(0xffff) * (prim_attr.z + prim_attr.dzdx * dx + prim_attr.dzdy * dy)), 0.0, float(0xffff)));
 
-    ivec4 uvzw = prim_attr.uvzw + prim_attr.duvzw_dx * dx + prim_attr.duvzw_dy * dy;
-    ivec2 uv = wrap_uv(uvzw.xy);
-    uint z = clamp_unorm16(uvzw.z);
-    int w = quant_w(uvzw.w);
+    float j = prim_attr.djdx * dx + prim_attr.djdy * dy;
+    float k = prim_attr.dkdx * dx + prim_attr.dkdy * dy;
+    float i = 1.0 - j - k;
+    vec3 bary = vec3(i, j, k);
 
-    uv = fixed_uv_divider(uv, w);
+    vec4 rgba =
+        vec4(uvec4(prim_attr.color_a)) * i +
+        vec4(uvec4(prim_attr.color_b)) * j +
+        vec4(uvec4(prim_attr.color_c)) * k;
+
+    uvec4 urgba = uvec4(clamp(round(rgba), vec4(0.0), vec4(255.0)));
+
+    float u = dot(prim_attr.u, bary);
+    float v = dot(prim_attr.v, bary);
+    float w = dot(prim_attr.w, bary);
+    w = max(w, 0.00001);
+    ivec2 uv = ivec2(round((vec2(u, v) / w) * 32.0));
 
     uv -= 16;
     ivec2 sub_uv = uv & 31;

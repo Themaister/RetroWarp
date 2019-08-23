@@ -16,26 +16,41 @@ static int16_t clamp_float_int16(float v)
 		return int16_t(v);
 }
 
+static uint8_t clamp_float_unorm(float v)
+{
+	if (v < 0.0f)
+		return 0;
+	else if (v > 255.0f)
+		return 255;
+	else
+		return int16_t(v);
+}
+
 static int16_t quantize_xy(float x)
 {
 	x *= float(1 << SUBPIXELS_LOG2);
 	return clamp_float_int16(std::round(x));
 }
 
-static void quantize_color(int32_t output[4], const float input[4])
+static void quantize_color(uint8_t output[4], const float input[4])
 {
 	for (int i = 0; i < 4; i++)
 	{
-		float rounded = std::round(input[i] * 255.0f * float(0x100));
-		assert(rounded <= float(std::numeric_limits<int32_t>::max()));
-		//output[i] = clamp_float_int16(rounded);
-		output[i] = int32_t(rounded);
+		float rounded = std::round(input[i] * 255.0f);
+		output[i] = clamp_float_unorm(rounded);
 	}
 }
 
 static int32_t quantize_z(float z)
 {
 	float rounded = std::round(z * float(((1 << 16) - 1) << 8));
+	assert(rounded <= float(std::numeric_limits<int32_t>::max()));
+	return int32_t(rounded);
+}
+
+static int32_t quantize_bary(float z)
+{
+	float rounded = std::round(z * float(1 << 16));
 	assert(rounded <= float(std::numeric_limits<int32_t>::max()));
 	return int32_t(rounded);
 }
@@ -49,7 +64,7 @@ static int32_t quantize_w(float w)
 
 static int32_t quantize_uv(float v)
 {
-	float rounded = std::round(v * float(1 << 12));
+	float rounded = std::round(v * float(1 << 16));
 	assert(rounded <= float(std::numeric_limits<int32_t>::max()));
 	return int32_t(rounded);
 }
@@ -117,9 +132,7 @@ static bool setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input, C
 	if (setup.pos.dxdy_b < setup.pos.dxdy_a)
 		setup.pos.flags |= PRIMITIVE_RIGHT_MAJOR_BIT;
 
-	quantize_color(setup.attr.color, input.vertices[index_a].color);
-
-	// Compute interpolation derivatives.
+	// Compute winding before reorder.
 	int ab_x = xs[1] - xs[0];
 	int ab_y = ys[1] - ys[0];
 	int bc_x = xs[2] - xs[1];
@@ -128,7 +141,7 @@ static bool setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input, C
 	int ca_y = ys[0] - ys[2];
 	int signed_area = ab_x * bc_y - ab_y * bc_x;
 
-	// Check if triangle is degenerate. Compute derivatives.
+	// Check if triangle is degenerate.
 	if (signed_area == 0)
 		return false;
 	else if (cull_mode == CullMode::CCWOnly && signed_area > 0)
@@ -136,67 +149,51 @@ static bool setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input, C
 	else if (cull_mode == CullMode::CWOnly && signed_area < 0)
 		return false;
 
+	// Recompute based on reordered vertices.
+	ab_x = x_b - x_a;
+	bc_x = x_c - x_b;
+	ca_x = x_a - x_c;
+	ab_y = y_mid - y_lo;
+	bc_y = y_hi - y_mid;
+	ca_y = y_lo - y_hi;
+	signed_area = ab_x * bc_y - ab_y * bc_x;
+
 	float inv_signed_area = 1.0f / float(signed_area);
-	float dcolor_dx[4];
-	float dcolor_dy[4];
 
-	for (int c = 0; c < 4; c++)
-	{
-		dcolor_dx[c] = -inv_signed_area * (ab_y * input.vertices[2].color[c] +
-		                                   ca_y * input.vertices[1].color[c] +
-		                                   bc_y * input.vertices[0].color[c]);
+	quantize_color(setup.attr.color_a, input.vertices[index_a].color);
+	quantize_color(setup.attr.color_b, input.vertices[index_b].color);
+	quantize_color(setup.attr.color_c, input.vertices[index_c].color);
+	setup.attr.u_a = input.vertices[index_a].u;
+	setup.attr.u_b = input.vertices[index_b].u;
+	setup.attr.u_c = input.vertices[index_c].u;
+	setup.attr.v_a = input.vertices[index_a].v;
+	setup.attr.v_b = input.vertices[index_b].v;
+	setup.attr.v_c = input.vertices[index_c].v;
 
-		dcolor_dy[c] = inv_signed_area * (ab_x * input.vertices[2].color[c] +
-		                                  ca_x * input.vertices[1].color[c] +
-		                                  bc_x * input.vertices[0].color[c]);
-	}
+	float dzdx = -inv_signed_area * (ab_y * input.vertices[index_c].z +
+	                                 ca_y * input.vertices[index_b].z +
+	                                 bc_y * input.vertices[index_a].z);
+	float dzdy = inv_signed_area * (ab_x * input.vertices[index_c].z +
+	                                ca_x * input.vertices[index_b].z +
+	                                bc_x * input.vertices[index_a].z);
 
-	quantize_color(setup.attr.dcolor_dx, dcolor_dx);
-	quantize_color(setup.attr.dcolor_dy, dcolor_dy);
+	float djdx = -inv_signed_area * ca_y;
+	float djdy = inv_signed_area * ca_x;
+	float dkdx = -inv_signed_area * ab_y;
+	float dkdy = inv_signed_area * ab_x;
 
-	float dzdx = -inv_signed_area * (ab_y * input.vertices[2].z +
-	                                 ca_y * input.vertices[1].z +
-	                                 bc_y * input.vertices[0].z);
-	float dzdy = inv_signed_area * (ab_x * input.vertices[2].z +
-	                                ca_x * input.vertices[1].z +
-	                                bc_x * input.vertices[0].z);
+	setup.attr.z = input.vertices[index_a].z;
+	setup.attr.dzdx = dzdx;
+	setup.attr.dzdy = dzdy;
 
-	float dwdx = -inv_signed_area * (ab_y * input.vertices[2].w +
-	                                 ca_y * input.vertices[1].w +
-	                                 bc_y * input.vertices[0].w);
-	float dwdy = inv_signed_area * (ab_x * input.vertices[2].w +
-	                                ca_x * input.vertices[1].w +
-	                                bc_x * input.vertices[0].w);
+	setup.attr.djdx = djdx;
+	setup.attr.djdy = djdy;
+	setup.attr.dkdx = dkdx;
+	setup.attr.dkdy = dkdy;
 
-	float dudx = -inv_signed_area * (ab_y * input.vertices[2].u +
-	                                 ca_y * input.vertices[1].u +
-	                                 bc_y * input.vertices[0].u);
-	float dudy = inv_signed_area * (ab_x * input.vertices[2].u +
-	                                ca_x * input.vertices[1].u +
-	                                bc_x * input.vertices[0].u);
-
-	float dvdx = -inv_signed_area * (ab_y * input.vertices[2].v +
-	                                 ca_y * input.vertices[1].v +
-	                                 bc_y * input.vertices[0].v);
-	float dvdy = inv_signed_area * (ab_x * input.vertices[2].v +
-	                                ca_x * input.vertices[1].v +
-	                                bc_x * input.vertices[0].v);
-
-	setup.attr.z = quantize_z(input.vertices[index_a].z);
-	setup.attr.dzdx = quantize_z(dzdx);
-	setup.attr.dzdy = quantize_z(dzdy);
-
-	setup.attr.w = quantize_w(input.vertices[index_a].w);
-	setup.attr.dwdx = quantize_w(dwdx);
-	setup.attr.dwdy = quantize_w(dwdy);
-
-	setup.attr.u = quantize_uv(input.vertices[index_a].u);
-	setup.attr.dudx = quantize_uv(dudx);
-	setup.attr.dudy = quantize_uv(dudy);
-
-	setup.attr.v = quantize_uv(input.vertices[index_a].v);
-	setup.attr.dvdx = quantize_uv(dvdx);
-	setup.attr.dvdy = quantize_uv(dvdy);
+	setup.attr.w_a = input.vertices[index_a].w;
+	setup.attr.w_b = input.vertices[index_b].w;
+	setup.attr.w_c = input.vertices[index_c].w;
 
 	setup.pos.flags |= PRIMITIVE_PERSPECTIVE_CORRECT_BIT;
 

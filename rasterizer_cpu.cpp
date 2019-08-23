@@ -3,6 +3,7 @@
 #include <utility>
 #include <algorithm>
 #include <assert.h>
+#include <math.h>
 
 namespace RetroWarp
 {
@@ -26,7 +27,7 @@ static int clamp_unorm8(int v)
 
 static uint16_t clamp_unorm16(int z)
 {
-	z = (z + 0x80) >> 8;
+	//z = (z + 0x80) >> 8;
 	if (z < 0)
 		return 0;
 	else if (z > 0xffff)
@@ -95,26 +96,32 @@ void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 		{
 			int dx = (x << SUBPIXELS_LOG2) - interpolation_base_x;
 
-			int r = prim.attr.color[0] + prim.attr.dcolor_dx[0] * dx + prim.attr.dcolor_dy[0] * dy;
-			int g = prim.attr.color[1] + prim.attr.dcolor_dx[1] * dx + prim.attr.dcolor_dy[1] * dy;
-			int b = prim.attr.color[2] + prim.attr.dcolor_dx[2] * dx + prim.attr.dcolor_dy[2] * dy;
-			int a = prim.attr.color[3] + prim.attr.dcolor_dx[3] * dx + prim.attr.dcolor_dy[3] * dy;
+			//uint16_t z = clamp_unorm16(0xffff * (prim.attr.z + prim.attr.dzdx * dx + prim.attr.dzdy * dy));
+			uint16_t z = clamp_unorm16(roundf(0xffff * (prim.attr.z + prim.attr.dzdx * dx + prim.attr.dzdy * dy)));
 
-			r = clamp_unorm8((r + 0x80) >> 8);
-			g = clamp_unorm8((g + 0x80) >> 8);
-			b = clamp_unorm8((b + 0x80) >> 8);
-			a = clamp_unorm8((a + 0x80) >> 8);
+			float j = prim.attr.djdx * float(dx) + prim.attr.djdy * float(dy);
+			float k = prim.attr.dkdx * float(dx) + prim.attr.dkdy * float(dy);
+			float i = 1.0f - j - k;
 
-			uint16_t z = clamp_unorm16(prim.attr.z + prim.attr.dzdx * dx + prim.attr.dzdy * dy);
-			int w = prim.attr.w + prim.attr.dwdx * dx + prim.attr.dwdy * dy;
-			int u = prim.attr.u + prim.attr.dudx * dx + prim.attr.dudy * dy;
-			int v = prim.attr.v + prim.attr.dvdx * dx + prim.attr.dvdy * dy;
-			//u = wrap_uv(u);
-			//v = wrap_uv(v);
+			float r = float(prim.attr.color_a[0]) * i + float(prim.attr.color_b[0]) * j + float(prim.attr.color_c[0]) * k;
+			float g = float(prim.attr.color_a[1]) * i + float(prim.attr.color_b[1]) * j + float(prim.attr.color_c[1]) * k;
+			float b = float(prim.attr.color_a[2]) * i + float(prim.attr.color_b[2]) * j + float(prim.attr.color_c[2]) * k;
+			float a = float(prim.attr.color_a[3]) * i + float(prim.attr.color_b[3]) * j + float(prim.attr.color_c[3]) * k;
 
-			unsigned uw = std::max(1, w);
-			int perspective_u = fixed_divider(u, uw, 9);
-			int perspective_v = fixed_divider(v, uw, 9);
+			r = clamp_unorm8(int(roundf(r)));
+			g = clamp_unorm8(int(roundf(g)));
+			b = clamp_unorm8(int(roundf(b)));
+			a = clamp_unorm8(int(roundf(a)));
+
+			float u = prim.attr.u_a * i + prim.attr.u_b * j + prim.attr.u_c * k;
+			float v = prim.attr.v_a * i + prim.attr.v_b * j + prim.attr.v_c * k;
+			float w = prim.attr.w_a * i + prim.attr.w_b * j + prim.attr.w_c * k;
+			w = std::max(0.0000001f, w);
+			u /= w;
+			v /= w;
+
+			int perspective_u = int(roundf(u * 32.0f));
+			int perspective_v = int(roundf(v * 32.0f));
 
 			perspective_u -= 16;
 			perspective_v -= 16;

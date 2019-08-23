@@ -18,8 +18,7 @@ struct BBox
 
 struct RasterizerGPU::Impl
 {
-	Context context;
-	Device device;
+	Device *device;
 	ImageHandle image;
 	BufferHandle color_buffer;
 	BufferHandle depth_buffer;
@@ -81,6 +80,8 @@ struct RasterizerGPU::Impl
 	{
 		int x, y, width, height;
 	} scissor;
+
+	void init(Device &device);
 
 	void reset_staging();
 	void begin_staging();
@@ -229,15 +230,15 @@ void RasterizerGPU::Impl::begin_staging()
 	info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
 
 	info.size = MAX_PRIMITIVES * sizeof(PrimitiveSetupPos);
-	staging.positions = device.create_buffer(info);
+	staging.positions = device->create_buffer(info);
 	info.size = MAX_PRIMITIVES * sizeof(PrimitiveSetupAttr);
-	staging.attributes = device.create_buffer(info);
+	staging.attributes = device->create_buffer(info);
 
 	staging.mapped_positions = static_cast<PrimitiveSetupPos *>(
-			device.map_host_buffer(*staging.positions,
+			device->map_host_buffer(*staging.positions,
 			                       MEMORY_ACCESS_WRITE_BIT));
 	staging.mapped_attributes = static_cast<PrimitiveSetupAttr *>(
-			device.map_host_buffer(*staging.attributes,
+			device->map_host_buffer(*staging.attributes,
 			                       MEMORY_ACCESS_WRITE_BIT));
 
 	staging.count = 0;
@@ -247,9 +248,9 @@ void RasterizerGPU::Impl::begin_staging()
 void RasterizerGPU::Impl::end_staging()
 {
 	if (staging.mapped_positions)
-		device.unmap_host_buffer(*staging.positions, MEMORY_ACCESS_WRITE_BIT);
+		device->unmap_host_buffer(*staging.positions, MEMORY_ACCESS_WRITE_BIT);
 	if (staging.mapped_attributes)
-		device.unmap_host_buffer(*staging.attributes, MEMORY_ACCESS_WRITE_BIT);
+		device->unmap_host_buffer(*staging.attributes, MEMORY_ACCESS_WRITE_BIT);
 
 	staging.mapped_positions = nullptr;
 	staging.mapped_attributes = nullptr;
@@ -402,8 +403,8 @@ void RasterizerGPU::Impl::flush()
 	if (staging.count == 0)
 		return;
 
-	device.next_frame_context();
-	auto cmd = device.request_command_buffer();
+	device->next_frame_context();
+	auto cmd = device->request_command_buffer();
 
 	set_fb_info(*cmd);
 
@@ -464,7 +465,7 @@ void RasterizerGPU::Impl::flush()
 	// ROP.
 	run_rop(*cmd);
 
-	device.submit(cmd);
+	device->submit(cmd);
 	reset_staging();
 }
 
@@ -477,13 +478,13 @@ void RasterizerGPU::Impl::init_binning_buffers()
 	             VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 
 	info.size = MAX_TILES_X * MAX_TILES_Y * TILE_BINNING_STRIDE * sizeof(uint32_t);
-	binning.mask_buffer = device.create_buffer(info);
+	binning.mask_buffer = device->create_buffer(info);
 
 	info.size = MAX_TILES_X_LOW_RES * MAX_TILES_Y_LOW_RES * TILE_BINNING_STRIDE * sizeof(uint32_t);
-	binning.mask_buffer_low_res = device.create_buffer(info);
+	binning.mask_buffer_low_res = device->create_buffer(info);
 
 	info.size = MAX_TILES_X * MAX_TILES_Y * TILE_BINNING_STRIDE_COARSE * sizeof(uint32_t);
-	binning.mask_buffer_coarse = device.create_buffer(info);
+	binning.mask_buffer_coarse = device->create_buffer(info);
 }
 
 void RasterizerGPU::Impl::init_prefix_sum_buffers()
@@ -495,16 +496,16 @@ void RasterizerGPU::Impl::init_prefix_sum_buffers()
 	             VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 
 	info.size = MAX_TILES_X * MAX_TILES_Y * TILE_BINNING_STRIDE * sizeof(uint16_t);
-	tile_count.tile_prefix_sum = device.create_buffer(info);
+	tile_count.tile_prefix_sum = device->create_buffer(info);
 
 	info.size = MAX_TILES_X * MAX_TILES_Y * sizeof(uint16_t);
-	tile_count.tile_total = device.create_buffer(info);
-	tile_count.horiz_prefix_sum = device.create_buffer(info);
-	tile_count.tile_offset = device.create_buffer(info);
+	tile_count.tile_total = device->create_buffer(info);
+	tile_count.horiz_prefix_sum = device->create_buffer(info);
+	tile_count.tile_offset = device->create_buffer(info);
 
 	info.size = MAX_TILES_Y * sizeof(uint16_t);
-	tile_count.horiz_total = device.create_buffer(info);
-	tile_count.vert_prefix_sum = device.create_buffer(info);
+	tile_count.horiz_total = device->create_buffer(info);
+	tile_count.vert_prefix_sum = device->create_buffer(info);
 }
 
 void RasterizerGPU::Impl::init_tile_buffers()
@@ -516,11 +517,11 @@ void RasterizerGPU::Impl::init_tile_buffers()
 	             VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 
 	info.size = MAX_NUM_TILE_INSTANCES * TILE_WIDTH * TILE_HEIGHT * sizeof(uint32_t);
-	tile_instance_data.color = device.create_buffer(info);
+	tile_instance_data.color = device->create_buffer(info);
 	info.size = MAX_NUM_TILE_INSTANCES * TILE_WIDTH * TILE_HEIGHT * sizeof(uint16_t);
-	tile_instance_data.depth = device.create_buffer(info);
+	tile_instance_data.depth = device->create_buffer(info);
 	info.size = MAX_NUM_TILE_INSTANCES * TILE_WIDTH * TILE_HEIGHT * sizeof(uint16_t);
-	tile_instance_data.flags = device.create_buffer(info);
+	tile_instance_data.flags = device->create_buffer(info);
 }
 
 void RasterizerGPU::Impl::init_raster_work_buffers()
@@ -533,15 +534,15 @@ void RasterizerGPU::Impl::init_raster_work_buffers()
 
 	// Round MAX_NUM_TILE_INSTANCES up to 0x10000.
 	info.size = (MAX_NUM_TILE_INSTANCES + 1) * sizeof(TileRasterWork) * 16;
-	raster_work.work_list_per_variant = device.create_buffer(info);
+	raster_work.work_list_per_variant = device->create_buffer(info);
 
 	info.size = 16 * (4 * sizeof(uint32_t));
 	info.usage |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
-	raster_work.item_count_per_variant = device.create_buffer(info);
+	raster_work.item_count_per_variant = device->create_buffer(info);
 }
 
 template <typename T>
-static std::vector<T> readback_buffer(Device &device, const Buffer &buffer)
+static std::vector<T> readback_buffer(Device *device, const Buffer &buffer)
 {
 	std::vector<T> result(buffer.get_create_info().size / sizeof(T));
 
@@ -549,28 +550,28 @@ static std::vector<T> readback_buffer(Device &device, const Buffer &buffer)
 	info.domain = BufferDomain::CachedHost;
 	info.size = buffer.get_create_info().size;
 	info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-	auto readback_buffer = device.create_buffer(info);
+	auto readback_buffer = device->create_buffer(info);
 
-	auto cmd = device.request_command_buffer();
+	auto cmd = device->request_command_buffer();
 	cmd->barrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_WRITE_BIT,
 	             VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_TRANSFER_READ_BIT);
 	cmd->copy_buffer(*readback_buffer, buffer);
 	cmd->barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
 	Fence fence;
-	device.submit(cmd, &fence);
+	device->submit(cmd, &fence);
 	fence->wait();
 
-	const void *mapped = device.map_host_buffer(*readback_buffer, MEMORY_ACCESS_READ_BIT);
+	const void *mapped = device->map_host_buffer(*readback_buffer, MEMORY_ACCESS_READ_BIT);
 	memcpy(result.data(), mapped, result.size() * sizeof(T));
-	device.unmap_host_buffer(*readback_buffer, MEMORY_ACCESS_READ_BIT);
+	device->unmap_host_buffer(*readback_buffer, MEMORY_ACCESS_READ_BIT);
 
 	return result;
 }
 
 void RasterizerGPU::Impl::test_prefix_sum()
 {
-	auto cmd = device.request_command_buffer();
+	auto cmd = device->request_command_buffer();
 	cmd->barrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_WRITE_BIT,
 	             VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_MEMORY_READ_BIT);
 
@@ -635,7 +636,7 @@ void RasterizerGPU::Impl::test_prefix_sum()
 	// Distribute work.
 	distribute_combiner_work(*cmd);
 
-	device.submit(cmd);
+	device->submit(cmd);
 
 	auto tile_prefix_sum = readback_buffer<uint16_t>(device, *tile_count.tile_prefix_sum);
 	auto tile_totals = readback_buffer<uint16_t>(device, *tile_count.tile_total);
@@ -650,28 +651,27 @@ void RasterizerGPU::Impl::test_prefix_sum()
 	reset_staging();
 }
 
-RasterizerGPU::RasterizerGPU()
+void RasterizerGPU::Impl::init(Device &device_)
 {
-	impl.reset(new Impl);
-	if (!Context::init_loader(nullptr))
-		throw std::runtime_error("Failed to init context.");
-	if (!impl->context.init_instance_and_device(nullptr, 0, nullptr, 0))
-		throw std::runtime_error("Failed to init instance and device.");
+	device = &device_;
 
-	impl->device.set_context(impl->context);
-
-	auto &features = impl->device.get_device_features();
+	auto &features = device->get_device_features();
 	if (!features.storage_8bit_features.storageBuffer8BitAccess)
 		throw std::runtime_error("8-bit storage not supported.");
 	if (!features.storage_16bit_features.storageBuffer16BitAccess)
 		throw std::runtime_error("16-bit storage not supported.");
 
-	impl->init_binning_buffers();
-	impl->init_prefix_sum_buffers();
-	impl->init_tile_buffers();
-	impl->init_raster_work_buffers();
+	init_binning_buffers();
+	init_prefix_sum_buffers();
+	init_tile_buffers();
+	init_raster_work_buffers();
 
-	impl->test_prefix_sum();
+	//test_prefix_sum();
+}
+
+RasterizerGPU::RasterizerGPU()
+{
+	impl.reset(new Impl);
 }
 
 RasterizerGPU::~RasterizerGPU()
@@ -680,9 +680,11 @@ RasterizerGPU::~RasterizerGPU()
 
 void RasterizerGPU::upload_texture(const TextureFormatLayout &layout)
 {
-	auto staging = impl->device.create_image_staging_buffer(layout);
+	impl->flush();
+
+	auto staging = impl->device->create_image_staging_buffer(layout);
 	auto info = ImageCreateInfo::immutable_2d_image(layout.get_width(), layout.get_height(), VK_FORMAT_R8G8B8A8_UINT);
-	impl->image = impl->device.create_image_from_staging_buffer(info, &staging);
+	impl->image = impl->device->create_image_from_staging_buffer(info, &staging);
 }
 
 void RasterizerGPU::resize(unsigned width, unsigned height)
@@ -694,36 +696,36 @@ void RasterizerGPU::resize(unsigned width, unsigned height)
 	info.domain = BufferDomain::Device;
 	info.size = width * height * sizeof(uint32_t);
 	info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-	impl->color_buffer = impl->device.create_buffer(info);
+	impl->color_buffer = impl->device->create_buffer(info);
 
 	info.size = (width * height * sizeof(uint16_t) + 3) & ~3u;
-	impl->depth_buffer = impl->device.create_buffer(info);
+	impl->depth_buffer = impl->device->create_buffer(info);
 }
 
 void RasterizerGPU::clear_depth(uint16_t z)
 {
 	impl->flush();
-	auto cmd = impl->device.request_command_buffer();
+	auto cmd = impl->device->request_command_buffer();
 	cmd->barrier(VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
 	             VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_TRANSFER_BIT,
 	             VK_ACCESS_TRANSFER_WRITE_BIT);
 	cmd->fill_buffer(*impl->depth_buffer, (uint32_t(z) << 16) | z);
-	impl->device.submit(cmd);
-	impl->device.next_frame_context();
+	impl->device->submit(cmd);
+	impl->device->next_frame_context();
 }
 
 void RasterizerGPU::clear_color(uint32_t rgba)
 {
 	impl->flush();
-	auto cmd = impl->device.request_command_buffer();
+	auto cmd = impl->device->request_command_buffer();
 	cmd->barrier(VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
 	             VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_TRANSFER_BIT,
 	             VK_ACCESS_TRANSFER_WRITE_BIT);
 	cmd->fill_buffer(*impl->color_buffer, rgba);
-	impl->device.submit(cmd);
-	impl->device.next_frame_context();
+	impl->device->submit(cmd);
+	impl->device->next_frame_context();
 }
 
 void RasterizerGPU::Impl::queue_primitive(const PrimitiveSetup &setup)
@@ -754,9 +756,9 @@ void RasterizerGPU::rasterize_primitives(const RetroWarp::PrimitiveSetup *setup,
 float RasterizerGPU::get_binning_ratio(size_t count)
 {
 	impl->flush();
-	impl->device.next_frame_context();
+	impl->device->next_frame_context();
 
-	auto cmd = impl->device.request_command_buffer();
+	auto cmd = impl->device->request_command_buffer();
 	cmd->barrier(VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
 	             VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_TRANSFER_BIT,
@@ -766,20 +768,20 @@ float RasterizerGPU::get_binning_ratio(size_t count)
 	info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 	info.domain = BufferDomain::CachedHost;
 	info.size = impl->binning.mask_buffer->get_create_info().size;
-	auto dst_buffer = impl->device.create_buffer(info);
+	auto dst_buffer = impl->device->create_buffer(info);
 	info.size = impl->binning.mask_buffer_coarse->get_create_info().size;
-	auto dst_buffer_coarse = impl->device.create_buffer(info);
+	auto dst_buffer_coarse = impl->device->create_buffer(info);
 	cmd->copy_buffer(*dst_buffer, *impl->binning.mask_buffer);
 	cmd->copy_buffer(*dst_buffer_coarse, *impl->binning.mask_buffer_coarse);
 	cmd->barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
 
 	Fence fence;
-	impl->device.submit(cmd, &fence);
+	impl->device->submit(cmd, &fence);
 
 	fence->wait();
-	auto *ptr = static_cast<uint32_t *>(impl->device.map_host_buffer(*dst_buffer, MEMORY_ACCESS_READ_BIT));
-	auto *ptr_coarse = static_cast<uint32_t *>(impl->device.map_host_buffer(*dst_buffer_coarse, MEMORY_ACCESS_READ_BIT));
+	auto *ptr = static_cast<uint32_t *>(impl->device->map_host_buffer(*dst_buffer, MEMORY_ACCESS_READ_BIT));
+	auto *ptr_coarse = static_cast<uint32_t *>(impl->device->map_host_buffer(*dst_buffer_coarse, MEMORY_ACCESS_READ_BIT));
 
 	unsigned num_tiles_x = (impl->width + TILE_WIDTH - 1) / TILE_WIDTH;
 	unsigned num_tiles_y = (impl->height + TILE_HEIGHT - 1) / TILE_HEIGHT;
@@ -809,17 +811,41 @@ float RasterizerGPU::get_binning_ratio(size_t count)
 		}
 	}
 
-	impl->device.unmap_host_buffer(*dst_buffer, MEMORY_ACCESS_READ_BIT);
-	impl->device.unmap_host_buffer(*dst_buffer_coarse, MEMORY_ACCESS_READ_BIT);
+	impl->device->unmap_host_buffer(*dst_buffer, MEMORY_ACCESS_READ_BIT);
+	impl->device->unmap_host_buffer(*dst_buffer_coarse, MEMORY_ACCESS_READ_BIT);
 	return float(total_count) / float(max_count);
+}
+
+ImageHandle RasterizerGPU::copy_to_framebuffer()
+{
+	ImageCreateInfo info = ImageCreateInfo::immutable_2d_image(impl->width, impl->height, VK_FORMAT_R8G8B8A8_SRGB);
+	info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+	info.initial_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+	auto image = impl->device->create_image(info);
+
+	impl->flush();
+
+	auto cmd = impl->device->request_command_buffer();
+	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+	             VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+	cmd->image_barrier(*image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+	                   VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+	                   VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+	cmd->copy_buffer_to_image(*image, *impl->color_buffer, 0, {}, { impl->width, impl->height, 1 }, 0, 0,
+	                          { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 });
+	cmd->image_barrier(*image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+	                   VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+	                   VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+	impl->device->submit(cmd);
+	return image;
 }
 
 bool RasterizerGPU::save_canvas(const char *path)
 {
 	impl->flush();
-	impl->device.next_frame_context();
+	impl->device->next_frame_context();
 
-	auto cmd = impl->device.request_command_buffer();
+	auto cmd = impl->device->request_command_buffer();
 	cmd->barrier(VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
 	             VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_TRANSFER_BIT,
@@ -829,22 +855,27 @@ bool RasterizerGPU::save_canvas(const char *path)
 	info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 	info.domain = BufferDomain::CachedHost;
 	info.size = impl->width * impl->height * sizeof(uint32_t);
-	auto dst_buffer = impl->device.create_buffer(info);
+	auto dst_buffer = impl->device->create_buffer(info);
 	cmd->copy_buffer(*dst_buffer, *impl->color_buffer);
 	cmd->barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
 
 	Fence fence;
-	impl->device.submit(cmd, &fence);
-	impl->device.next_frame_context();
+	impl->device->submit(cmd, &fence);
+	impl->device->next_frame_context();
 
 	fence->wait();
-	auto *ptr = static_cast<uint32_t *>(impl->device.map_host_buffer(*dst_buffer, MEMORY_ACCESS_READ_BIT | MEMORY_ACCESS_WRITE_BIT));
+	auto *ptr = static_cast<uint32_t *>(impl->device->map_host_buffer(*dst_buffer, MEMORY_ACCESS_READ_BIT | MEMORY_ACCESS_WRITE_BIT));
 	for (unsigned i = 0; i < impl->width * impl->height; i++)
 		ptr[i] |= 0xff000000u;
 	bool res = stbi_write_png(path, impl->width, impl->height, 4, ptr, impl->width * 4);
-	impl->device.unmap_host_buffer(*dst_buffer, MEMORY_ACCESS_READ_BIT | MEMORY_ACCESS_WRITE_BIT);
+	impl->device->unmap_host_buffer(*dst_buffer, MEMORY_ACCESS_READ_BIT | MEMORY_ACCESS_WRITE_BIT);
 	return res;
+}
+
+void RasterizerGPU::init(Device &device)
+{
+	impl->init(device);
 }
 
 }
