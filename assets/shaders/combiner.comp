@@ -16,17 +16,17 @@ layout(std430, set = 0, binding = 0) readonly buffer WorkList
 
 struct ColorTile
 {
-    u8vec4 color[TILE_HEIGHT][TILE_WIDTH];
+    u8vec4 color[TILE_HEIGHT * TILE_WIDTH];
 };
 
 struct DepthTile
 {
-    uint16_t depth[TILE_HEIGHT][TILE_WIDTH];
+    uint16_t depth[TILE_HEIGHT * TILE_WIDTH];
 };
 
 struct FlagTile
 {
-    uint16_t flag[TILE_HEIGHT][TILE_WIDTH];
+    uint16_t flag[TILE_HEIGHT * TILE_WIDTH];
 };
 
 layout(std430, set = 0, binding = 1) writeonly buffer Color
@@ -170,7 +170,7 @@ void main()
 
     if (y < span_begin_y || y > span_end_y)
     {
-        flag_tiles[tile_instance_index].flag[gl_LocalInvocationID.y][gl_LocalInvocationID.x] = uint16_t(0);
+        flag_tiles[tile_instance_index].flag[gl_LocalInvocationIndex] = uint16_t(0);
         return;
     }
 
@@ -203,7 +203,7 @@ void main()
 
     if (x < start_x || x > end_x)
     {
-        flag_tiles[tile_instance_index].flag[gl_LocalInvocationID.y][gl_LocalInvocationID.x] = uint16_t(0);
+        flag_tiles[tile_instance_index].flag[gl_LocalInvocationIndex] = uint16_t(0);
         return;
     }
 
@@ -238,7 +238,7 @@ void main()
 
     tex = multiply_unorm8(tex, urgba);
 
-    color_tiles[tile_instance_index].color[gl_LocalInvocationID.y][gl_LocalInvocationID.x] = u8vec4(tex);
-    depth_tiles[tile_instance_index].depth[gl_LocalInvocationID.y][gl_LocalInvocationID.x] = uint16_t(z);
-    flag_tiles[tile_instance_index].flag[gl_LocalInvocationID.y][gl_LocalInvocationID.x] = uint16_t(1);
+    color_tiles[tile_instance_index].color[gl_LocalInvocationIndex] = u8vec4(tex);
+    depth_tiles[tile_instance_index].depth[gl_LocalInvocationIndex] = uint16_t(z);
+    flag_tiles[tile_instance_index].flag[gl_LocalInvocationIndex] = uint16_t(1);
 }

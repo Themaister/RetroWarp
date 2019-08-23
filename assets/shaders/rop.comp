@@ -1,0 +1,124 @@
+#version 450
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage : require
+#extension GL_EXT_samplerless_texture_functions : require
+layout(local_size_x = 16, local_size_y = 16) in;
+
+#include "constants.h"
+#include "fb_info.h"
+
+layout(std430, set = 0, binding = 0) buffer ColorFramebuffer
+{
+    u8vec4 color_data[];
+};
+
+layout(std430, set = 0, binding = 1) buffer DepthFramebuffer
+{
+    uint16_t depth_data[];
+};
+
+layout(std430, set = 0, binding = 2) readonly buffer Binning
+{
+    uint binning_bitmask[];
+};
+
+layout(std430, set = 0, binding = 3) readonly buffer CoarseBinning
+{
+    uint coarse_binning_bitmask[];
+};
+
+struct ColorTile
+{
+    u8vec4 color[TILE_HEIGHT * TILE_WIDTH];
+};
+
+struct DepthTile
+{
+    uint16_t depth[TILE_HEIGHT * TILE_WIDTH];
+};
+
+struct FlagTile
+{
+    uint16_t flag[TILE_HEIGHT * TILE_WIDTH];
+};
+
+layout(std430, set = 0, binding = 4) readonly buffer Color
+{
+    ColorTile color_tiles[];
+};
+
+layout(std430, set = 0, binding = 5) readonly buffer Depth
+{
+    DepthTile depth_tiles[];
+};
+
+layout(std430, set = 0, binding = 6) readonly buffer Flags
+{
+    FlagTile flag_tiles[];
+};
+
+layout(std430, set = 0, binding = 7) readonly buffer TileOffsets
+{
+    uint16_t tile_offsets[];
+};
+
+layout(std430, set = 0, binding = 8) readonly buffer TilePrefixSum
+{
+    uint16_t tile_prefix_sum[];
+};
+
+void main()
+{
+    uvec2 coord = gl_GlobalInvocationID.xy;
+    if (any(greaterThanEqual(coord, fb_info.resolution)))
+        return;
+
+    int pixel_index = int(coord.x) + int(coord.y) * fb_info.fb_stride;
+
+    uvec4 current_color = uvec4(color_data[pixel_index]);
+    uint current_z = uint(depth_data[pixel_index]);
+
+    ivec2 tile = ivec2(gl_WorkGroupID.xy);
+    int linear_tile = tile.x + tile.y * MAX_TILES_X;
+    int linear_tile_base = linear_tile * TILE_BINNING_STRIDE;
+    int linear_tile_base_coarse = linear_tile * TILE_BINNING_STRIDE_COARSE;
+
+    int primitive_mask_count = fb_info.primitive_count_32;
+    int primitive_coarse_mask_count = fb_info.primitive_count_1024;
+    uint tile_instance_base_offset = uint(tile_offsets[linear_tile]);
+
+    for (int coarse_mask_index = 0; coarse_mask_index < primitive_coarse_mask_count; coarse_mask_index++)
+    {
+        uint coarse_binned = coarse_binning_bitmask[linear_tile_base_coarse + coarse_mask_index];
+        while (coarse_binned != 0u)
+        {
+            int mask_index = findLSB(coarse_binned);
+            coarse_binned &= ~uint(1 << mask_index);
+            mask_index += coarse_mask_index * 32;
+            uint binned = binning_bitmask[linear_tile_base + mask_index];
+            uint tile_instance = uint(tile_prefix_sum[linear_tile_base + mask_index]) + tile_instance_base_offset;
+
+            while (binned != 0u)
+            {
+                int i = findLSB(binned);
+                binned &= ~uint(1 << i);
+
+                uint flags = uint(flag_tiles[tile_instance].flag[gl_LocalInvocationIndex]);
+                if (flags != 0u)
+                {
+                    uint z = uint(depth_tiles[tile_instance].depth[gl_LocalInvocationIndex]);
+                    if (z < current_z)
+                    {
+                        current_z = z;
+                        current_color = uvec4(color_tiles[tile_instance].color[gl_LocalInvocationIndex]);
+                    }
+                }
+
+                tile_instance++;
+            }
+        }
+    }
+
+    color_data[pixel_index] = u8vec4(current_color);
+    depth_data[pixel_index] = uint16_t(current_z);
+}

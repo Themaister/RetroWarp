@@ -383,14 +383,16 @@ void RasterizerGPU::Impl::set_fb_info(CommandBuffer &cmd)
 
 void RasterizerGPU::Impl::run_rop(CommandBuffer &cmd)
 {
-	cmd.set_program("assets://shaders/rasterize.comp");
-	cmd.set_storage_buffer(0, 0, *staging.positions);
-	cmd.set_storage_buffer(0, 1, *staging.attributes);
-	cmd.set_storage_buffer(0, 2, *color_buffer);
-	cmd.set_storage_buffer(0, 3, *depth_buffer);
-	cmd.set_storage_buffer(0, 4, *binning.mask_buffer);
-	cmd.set_storage_buffer(0, 5, *binning.mask_buffer_coarse);
-	cmd.set_texture(1, 0, image->get_view());
+	cmd.set_program("assets://shaders/rop.comp");
+	cmd.set_storage_buffer(0, 0, *color_buffer);
+	cmd.set_storage_buffer(0, 1, *depth_buffer);
+	cmd.set_storage_buffer(0, 2, *binning.mask_buffer);
+	cmd.set_storage_buffer(0, 3, *binning.mask_buffer_coarse);
+	cmd.set_storage_buffer(0, 4, *tile_instance_data.color);
+	cmd.set_storage_buffer(0, 5, *tile_instance_data.depth);
+	cmd.set_storage_buffer(0, 6, *tile_instance_data.flags);
+	cmd.set_storage_buffer(0, 7, *tile_count.tile_offset);
+	cmd.set_storage_buffer(0, 8, *tile_count.tile_prefix_sum);
 	cmd.dispatch((width + TILE_WIDTH - 1) / TILE_WIDTH, (height + TILE_HEIGHT - 1) / TILE_HEIGHT, 1);
 }
 
@@ -534,6 +536,7 @@ void RasterizerGPU::Impl::init_raster_work_buffers()
 	raster_work.work_list_per_variant = device.create_buffer(info);
 
 	info.size = 16 * (4 * sizeof(uint32_t));
+	info.usage |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
 	raster_work.item_count_per_variant = device.create_buffer(info);
 }
 
