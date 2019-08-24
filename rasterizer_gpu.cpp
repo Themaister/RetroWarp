@@ -258,24 +258,28 @@ void RasterizerGPU::Impl::end_staging()
 
 void RasterizerGPU::Impl::clear_indirect_buffer(CommandBuffer &cmd)
 {
+	cmd.begin_region("clear-indirect-buffer");
 	cmd.set_program("assets://shaders/clear_indirect_buffers.comp");
 	cmd.set_storage_buffer(0, 0, *raster_work.item_count_per_variant);
 	cmd.dispatch(1, 1, 1);
+	cmd.end_region();
 }
 
 void RasterizerGPU::Impl::binning_low_res_prepass(CommandBuffer &cmd)
 {
+	cmd.begin_region("binning-low-res-prepass");
 	cmd.set_program("assets://shaders/binning_low_res.comp");
 	cmd.set_storage_buffer(0, 0, *binning.mask_buffer_low_res);
 	cmd.set_storage_buffer(0, 1, *staging.positions);
 	cmd.dispatch((staging.count + 63) / 64,
 	             (width + 4 * TILE_WIDTH - 1) / (4 * TILE_WIDTH),
 	             (height + 4 * TILE_HEIGHT - 1) / (4 * TILE_HEIGHT));
-
+	cmd.end_region();
 }
 
 void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd)
 {
+	cmd.begin_region("binning-full-res");
 	cmd.set_program("assets://shaders/binning.comp");
 	cmd.set_storage_buffer(0, 0, *binning.mask_buffer);
 	cmd.set_storage_buffer(0, 1, *staging.positions);
@@ -283,10 +287,12 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd)
 	cmd.dispatch((staging.count + 63) / 64,
 	             (width + TILE_WIDTH - 1) / TILE_WIDTH,
 	             (height + TILE_HEIGHT - 1) / TILE_HEIGHT);
+	cmd.end_region();
 }
 
 void RasterizerGPU::Impl::build_coarse_mask(CommandBuffer &cmd)
 {
+	cmd.begin_region("build-coarse-mask");
 	uint32_t num_masks = (staging.count + 31) / 32;
 	cmd.set_program("assets://shaders/build_coarse_mask.comp");
 	cmd.set_storage_buffer(0, 0, *binning.mask_buffer);
@@ -295,10 +301,12 @@ void RasterizerGPU::Impl::build_coarse_mask(CommandBuffer &cmd)
 	cmd.dispatch((num_masks + 63) / 64,
 	             (width + TILE_WIDTH - 1) / TILE_WIDTH,
 	             (height + TILE_HEIGHT - 1) / TILE_HEIGHT);
+	cmd.end_region();
 }
 
 void RasterizerGPU::Impl::run_per_tile_prefix_sum(CommandBuffer &cmd)
 {
+	cmd.begin_region("run-per-tile-prefix-sum");
 	cmd.set_program("assets://shaders/tile_prefix_sum.comp");
 	cmd.set_storage_buffer(0, 0, *binning.mask_buffer);
 	cmd.set_storage_buffer(0, 1, *tile_count.tile_prefix_sum);
@@ -307,37 +315,45 @@ void RasterizerGPU::Impl::run_per_tile_prefix_sum(CommandBuffer &cmd)
 	unsigned tiles_x = (width + TILE_WIDTH - 1) / TILE_WIDTH;
 	unsigned tiles_y = (height + TILE_HEIGHT - 1) / TILE_HEIGHT;
 	cmd.dispatch(tiles_x, tiles_y, 1);
+	cmd.end_region();
 }
 
 void RasterizerGPU::Impl::run_horiz_prefix_sum(CommandBuffer &cmd)
 {
+	cmd.begin_region("run-horiz-prefix-sum");
 	cmd.set_program("assets://shaders/horiz_prefix_sum.comp");
 	cmd.set_storage_buffer(0, 0, *tile_count.tile_total);
 	cmd.set_storage_buffer(0, 1, *tile_count.horiz_prefix_sum);
 	cmd.set_storage_buffer(0, 2, *tile_count.horiz_total);
 	unsigned tiles_y = (height + TILE_HEIGHT - 1) / TILE_HEIGHT;
 	cmd.dispatch(1, tiles_y, 1);
+	cmd.end_region();
 }
 
 void RasterizerGPU::Impl::run_vert_prefix_sum(CommandBuffer &cmd)
 {
+	cmd.begin_region("run-vert-prefix-sum");
 	cmd.set_program("assets://shaders/vert_prefix_sum.comp");
 	cmd.set_storage_buffer(0, 0, *tile_count.horiz_total);
 	cmd.set_storage_buffer(0, 1, *tile_count.vert_prefix_sum);
 	cmd.dispatch(1, 1, 1);
+	cmd.end_region();
 }
 
 void RasterizerGPU::Impl::finalize_tile_offsets(CommandBuffer &cmd)
 {
+	cmd.begin_region("finalize-tile-offsets");
 	cmd.set_program("assets://shaders/finalize_tile_offsets.comp");
 	cmd.set_storage_buffer(0, 0, *tile_count.horiz_prefix_sum);
 	cmd.set_storage_buffer(0, 1, *tile_count.vert_prefix_sum);
 	cmd.set_storage_buffer(0, 2, *tile_count.tile_offset);
 	cmd.dispatch(MAX_TILES_X / 8, MAX_TILES_Y / 8, 1);
+	cmd.end_region();
 }
 
 void RasterizerGPU::Impl::distribute_combiner_work(CommandBuffer &cmd)
 {
+	cmd.begin_region("distribute-combiner-work");
 	cmd.set_program("assets://shaders/distribute_combiner_work.comp");
 	cmd.set_storage_buffer(0, 0, *tile_count.tile_offset);
 	cmd.set_storage_buffer(0, 1, *tile_count.tile_prefix_sum);
@@ -348,10 +364,12 @@ void RasterizerGPU::Impl::distribute_combiner_work(CommandBuffer &cmd)
 	unsigned num_tiles_x = (width + TILE_WIDTH - 1) / TILE_WIDTH;
 	unsigned num_tiles_y = (height + TILE_HEIGHT - 1) / TILE_HEIGHT;
 	cmd.dispatch(num_tiles_x, num_tiles_y, 1);
+	cmd.end_region();
 }
 
 void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 {
+	cmd.begin_region("dispatch-combiner-work");
 	cmd.set_program("assets://shaders/combiner.comp");
 	cmd.set_storage_buffer(0, 0, *raster_work.work_list_per_variant);
 	cmd.set_storage_buffer(0, 1, *tile_instance_data.color);
@@ -362,6 +380,7 @@ void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 	cmd.set_texture(1, 0, image->get_view());
 
 	cmd.dispatch_indirect(*raster_work.item_count_per_variant, 0);
+	cmd.end_region();
 }
 
 void RasterizerGPU::Impl::set_fb_info(CommandBuffer &cmd)
@@ -384,6 +403,7 @@ void RasterizerGPU::Impl::set_fb_info(CommandBuffer &cmd)
 
 void RasterizerGPU::Impl::run_rop(CommandBuffer &cmd)
 {
+	cmd.begin_region("run-rop");
 	cmd.set_program("assets://shaders/rop.comp");
 	cmd.set_storage_buffer(0, 0, *color_buffer);
 	cmd.set_storage_buffer(0, 1, *depth_buffer);
@@ -395,6 +415,7 @@ void RasterizerGPU::Impl::run_rop(CommandBuffer &cmd)
 	cmd.set_storage_buffer(0, 7, *tile_count.tile_offset);
 	cmd.set_storage_buffer(0, 8, *tile_count.tile_prefix_sum);
 	cmd.dispatch((width + TILE_WIDTH - 1) / TILE_WIDTH, (height + TILE_HEIGHT - 1) / TILE_HEIGHT, 1);
+	cmd.end_region();
 }
 
 void RasterizerGPU::Impl::flush()
@@ -403,7 +424,6 @@ void RasterizerGPU::Impl::flush()
 	if (staging.count == 0)
 		return;
 
-	device->next_frame_context();
 	auto cmd = device->request_command_buffer();
 
 	set_fb_info(*cmd);
@@ -461,6 +481,7 @@ void RasterizerGPU::Impl::flush()
 
 	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+
 
 	// ROP.
 	run_rop(*cmd);
@@ -712,7 +733,6 @@ void RasterizerGPU::clear_depth(uint16_t z)
 	             VK_ACCESS_TRANSFER_WRITE_BIT);
 	cmd->fill_buffer(*impl->depth_buffer, (uint32_t(z) << 16) | z);
 	impl->device->submit(cmd);
-	impl->device->next_frame_context();
 }
 
 void RasterizerGPU::clear_color(uint32_t rgba)
@@ -725,7 +745,6 @@ void RasterizerGPU::clear_color(uint32_t rgba)
 	             VK_ACCESS_TRANSFER_WRITE_BIT);
 	cmd->fill_buffer(*impl->color_buffer, rgba);
 	impl->device->submit(cmd);
-	impl->device->next_frame_context();
 }
 
 void RasterizerGPU::Impl::queue_primitive(const PrimitiveSetup &setup)

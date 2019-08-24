@@ -309,7 +309,7 @@ void SWRenderApplication::render_frame(double, double)
 			unsigned count = setup_clipped_triangles(setups, input, CullMode::CCWOnly, viewport_transform);
 			//for (unsigned i = 0; i < count; i++)
 			//	rasterizer.render_primitive(setups[i]);
-			rasterizer_gpu.rasterize_primitives(setups, count);
+			//rasterizer_gpu.rasterize_primitives(setups, count);
 		}
 	}
 
@@ -364,50 +364,3 @@ Application *application_create(int argc, char **argv)
 	return new SWRenderApplication(argv[1]);
 }
 }
-
-#if 0
-int main(int argc, char **argv)
-{
-
-	Global::init();
-
-	SceneLoader loader;
-	loader.load_scene(argv[1]);
-
-	auto &scene = loader.get_scene();
-	auto *renderables_holder = scene.get_entity_pool().get_component_group_holder<RenderableComponent, RenderInfoComponent>();
-	auto &renderables = renderables_holder->get_groups();
-	auto &renderable_entities = renderables_holder->get_entities();
-
-	for (size_t i = 0; i < renderables.size(); i++)
-		create_software_renderable(renderable_entities[i], get_component<RenderableComponent>(renderables[i]));
-
-	ViewportTransform vp = { 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f };
-	PrimitiveSetup setup[256];
-
-	for (auto &prim : input_primitives)
-	{
-		//unsigned prim_index = unsigned(&prim - input_primitives.data());
-		unsigned count = setup_clipped_triangles(setup, prim, CullMode::CCWOnly, vp);
-		for (unsigned i = 0; i < count; i++)
-		{
-			rasterizer.render_primitive(setup[i]);
-		}
-	}
-
-	rop.save_canvas("/tmp/test.png");
-
-
-#if 0
-	RasterizerGPU gpu;
-	gpu.resize(1920, 1080);
-	gpu.upload_texture(sampler.tex.get_layout());
-	gpu.clear_color(0);
-	gpu.clear_depth();
-	gpu.rasterize_primitives(setups.data(), setups.size());
-	gpu.save_canvas("/tmp/test_gpu.png");
-	float ratio = gpu.get_binning_ratio(setups.size());
-	LOGI("Binning ratio: %f %%\n", 100.0f * ratio);
-#endif
-}
-#endif
