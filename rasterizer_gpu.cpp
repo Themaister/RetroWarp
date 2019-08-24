@@ -377,7 +377,7 @@ void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 	cmd.set_storage_buffer(0, 3, *tile_instance_data.flags);
 	cmd.set_storage_buffer(0, 4, *staging.positions);
 	cmd.set_storage_buffer(0, 5, *staging.attributes);
-	cmd.set_texture(1, 0, image->get_view());
+	cmd.set_texture(1, 0, image->get_view(), StockSampler::TrilinearWrap);
 
 	cmd.dispatch_indirect(*raster_work.item_count_per_variant, 0);
 	cmd.end_region();
@@ -704,7 +704,7 @@ void RasterizerGPU::upload_texture(const TextureFormatLayout &layout)
 	impl->flush();
 
 	auto staging = impl->device->create_image_staging_buffer(layout);
-	auto info = ImageCreateInfo::immutable_2d_image(layout.get_width(), layout.get_height(), VK_FORMAT_R8G8B8A8_UINT);
+	auto info = ImageCreateInfo::immutable_2d_image(layout.get_width(), layout.get_height(), VK_FORMAT_R8G8B8A8_UNORM, true);
 	impl->image = impl->device->create_image_from_staging_buffer(info, &staging);
 }
 

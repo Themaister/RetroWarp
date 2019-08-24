@@ -54,7 +54,7 @@ layout(std430, set = 0, binding = 5) readonly buffer TriangleSetupAttr
     PrimitiveSetupAttr primitives_attr[];
 };
 
-layout(set = 1, binding = 0) uniform utexture2D uTexture;
+layout(set = 1, binding = 0) uniform sampler2D uTexture;
 
 int quant_w(int w)
 {
@@ -237,7 +237,38 @@ void main()
 
     uv += ivec2(prim_attr.uv_offset);
 
-    uvec4 tex_00 = texelFetch(uTexture, uv, 0);
+    vec2 f_uv = vec2(uv) / textureSize(uTexture, 0).xy;
+
+    // UV derivatives.
+    float djdx = prim_attr.djdx * float(1 << SUBPIXELS_LOG2);
+    float djdy = prim_attr.djdy * float(1 << SUBPIXELS_LOG2);
+    float dkdx = prim_attr.dkdx * float(1 << SUBPIXELS_LOG2);
+    float dkdy = prim_attr.dkdy * float(1 << SUBPIXELS_LOG2);
+
+    float dudx = djdx * (prim_attr.u.y - prim_attr.u.x) + dkdx * (prim_attr.u.z - prim_attr.u.x);
+    float dudy = djdy * (prim_attr.u.y - prim_attr.u.x) + dkdy * (prim_attr.u.z - prim_attr.u.x);
+    float dvdx = djdx * (prim_attr.v.y - prim_attr.v.x) + dkdx * (prim_attr.v.z - prim_attr.v.x);
+    float dvdy = djdy * (prim_attr.v.y - prim_attr.v.x) + dkdy * (prim_attr.v.z - prim_attr.v.x);
+    float dwdx = djdx * (prim_attr.w.y - prim_attr.w.x) + dkdx * (prim_attr.w.z - prim_attr.w.x);
+    float dwdy = djdy * (prim_attr.w.y - prim_attr.w.x) + dkdy * (prim_attr.w.z - prim_attr.w.x);
+
+    float dUdx = (u + dudx) / (w + dwdx) - u / w;
+    float dUdy = (u + dudy) / (w + dwdy) - u / w;
+    float dVdx = (v + dvdx) / (w + dwdx) - v / w;
+    float dVdy = (v + dvdy) / (w + dwdy) - v / w;
+
+    float f_width = max(abs(dUdx) + abs(dUdy), abs(dVdx) + abs(dVdy));
+    f_width = max(f_width, 1.0);
+    float f_lod = log2(f_width);
+
+    uvec4 tex = uvec4(255.0 * textureLod(uTexture, f_uv, f_lod));
+    if (tex.w < 128u)
+    {
+        flag_tiles[tile_instance_index].flag[gl_LocalInvocationIndex] = uint16_t(0);
+        return;
+    }
+    //tex = uvec4(30.0 * f_lod);
+#if 0
     uvec4 tex_10 = texelFetchOffset(uTexture, uv, 0, ivec2(1, 0));
     uvec4 tex_01 = texelFetchOffset(uTexture, uv, 0, ivec2(0, 1));
     uvec4 tex_11 = texelFetchOffset(uTexture, uv, 0, ivec2(1, 1));
@@ -245,6 +276,7 @@ void main()
     uvec4 tex_0 = filter_linear_horiz(tex_00, tex_10, sub_uv.x);
     uvec4 tex_1 = filter_linear_horiz(tex_01, tex_11, sub_uv.x);
     uvec4 tex = filter_linear_vert(tex_0, tex_1, sub_uv.y);
+#endif
 
     tex = multiply_unorm8(tex, urgba);
 
