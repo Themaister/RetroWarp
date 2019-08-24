@@ -309,7 +309,7 @@ void SWRenderApplication::render_frame(double, double)
 			unsigned count = setup_clipped_triangles(setups, input, CullMode::CCWOnly, viewport_transform);
 			//for (unsigned i = 0; i < count; i++)
 			//	rasterizer.render_primitive(setups[i]);
-			//rasterizer_gpu.rasterize_primitives(setups, count);
+			rasterizer_gpu.rasterize_primitives(setups, count);
 		}
 	}
 
