@@ -3,7 +3,7 @@
 #extension GL_EXT_shader_8bit_storage : require
 #extension GL_EXT_samplerless_texture_functions : require
 
-layout(local_size_x = 16, local_size_y = 16) in;
+layout(local_size_x = 256) in;
 
 #include "constants.h"
 #include "primitive_setup.h"
@@ -141,6 +141,9 @@ ivec2 wrap_uv(ivec2 uv)
     return (uv << 11) >> 11;
 }
 
+shared float shared_u[gl_WorkGroupSize.x];
+shared float shared_v[gl_WorkGroupSize.x];
+
 void main()
 {
     uint work_instance = gl_WorkGroupID.x;
@@ -150,8 +153,16 @@ void main()
     uint tile_y = work_item.y;
     uint tile_instance_index = work_item.z;
     uint primitive_index = work_item.w;
-    int x = int(tile_x * uint(TILE_WIDTH) + gl_LocalInvocationID.x);
-    int y = int(tile_y * uint(TILE_HEIGHT) + gl_LocalInvocationID.y);
+
+    uint quad_index = gl_LocalInvocationIndex >> 2u;
+    uint quad_x = quad_index & 7u;
+    uint quad_y = (quad_index >> 3u) & 7u;
+
+    uint local_x = quad_x * 2u + (gl_LocalInvocationIndex & 1u);
+    uint local_y = quad_y * 2u + ((gl_LocalInvocationIndex >> 1u) & 1u);
+    int x = int(tile_x * uint(TILE_WIDTH) + local_x);
+    int y = int(tile_y * uint(TILE_HEIGHT) + local_y);
+
     int y_sub = y << SUBPIXELS_LOG2;
 
 #define prim_pos primitives_pos[primitive_index]
@@ -168,9 +179,27 @@ void main()
     if (span_end_y >= fb_info.scissor.y + fb_info.scissor.w)
         span_end_y = fb_info.scissor.y + fb_info.scissor.w - 1;
 
+    // Need to compute UV for derivatives.
+    float dx = float((x << SUBPIXELS_LOG2) - interpolation_base_x);
+    float dy = float(y_sub - interpolation_base_y);
+
+    float j = prim_attr.djdx * dx + prim_attr.djdy * dy;
+    float k = prim_attr.dkdx * dx + prim_attr.dkdy * dy;
+    float i = 1.0 - j - k;
+    vec3 bary = vec3(i, j, k);
+
+    float u = dot(prim_attr.u, bary);
+    float v = dot(prim_attr.v, bary);
+    float w = dot(prim_attr.w, bary);
+    w = max(w, 0.00001);
+    vec2 f_uv = vec2(u, v) / w;
+    shared_u[gl_LocalInvocationIndex] = f_uv.x;
+    shared_v[gl_LocalInvocationIndex] = f_uv.y;
+    barrier();
+
     if (y < span_begin_y || y > span_end_y)
     {
-        flag_tiles[tile_instance_index].flag[gl_LocalInvocationIndex] = uint16_t(0);
+        flag_tiles[tile_instance_index].flag[local_y * TILE_WIDTH + local_x] = uint16_t(0);
         return;
     }
 
@@ -203,20 +232,12 @@ void main()
 
     if (x < start_x || x > end_x)
     {
-        flag_tiles[tile_instance_index].flag[gl_LocalInvocationIndex] = uint16_t(0);
+        flag_tiles[tile_instance_index].flag[local_y * TILE_WIDTH + local_x] = uint16_t(0);
         return;
     }
 
     // We've passed the rasterization test. Interpolate colors, Z, 1/W.
-    float dy = float(y_sub - interpolation_base_y);
-    float dx = float((x << SUBPIXELS_LOG2) - interpolation_base_x);
-
     uint z = uint(clamp(round(float(0xffff) * (prim_attr.z + prim_attr.dzdx * dx + prim_attr.dzdy * dy)), 0.0, float(0xffff)));
-
-    float j = prim_attr.djdx * dx + prim_attr.djdy * dy;
-    float k = prim_attr.dkdx * dx + prim_attr.dkdy * dy;
-    float i = 1.0 - j - k;
-    vec3 bary = vec3(i, j, k);
 
     vec4 rgba =
         vec4(uvec4(prim_attr.color_a)) * i +
@@ -225,49 +246,28 @@ void main()
 
     uvec4 urgba = uvec4(clamp(round(rgba), vec4(0.0), vec4(255.0)));
 
-    float u = dot(prim_attr.u, bary);
-    float v = dot(prim_attr.v, bary);
-    float w = dot(prim_attr.w, bary);
-    w = max(w, 0.00001);
-    ivec2 uv = ivec2(round((vec2(u, v) / w) * 32.0));
-
-    uv -= 16;
-    ivec2 sub_uv = uv & 31;
-    uv >>= 5;
-
-    uv += ivec2(prim_attr.uv_offset);
-
-    vec2 f_uv = vec2(uv) / textureSize(uTexture, 0).xy;
-
-    // UV derivatives.
-    float djdx = prim_attr.djdx * float(1 << SUBPIXELS_LOG2);
-    float djdy = prim_attr.djdy * float(1 << SUBPIXELS_LOG2);
-    float dkdx = prim_attr.dkdx * float(1 << SUBPIXELS_LOG2);
-    float dkdy = prim_attr.dkdy * float(1 << SUBPIXELS_LOG2);
-
-    float dudx = djdx * (prim_attr.u.y - prim_attr.u.x) + dkdx * (prim_attr.u.z - prim_attr.u.x);
-    float dudy = djdy * (prim_attr.u.y - prim_attr.u.x) + dkdy * (prim_attr.u.z - prim_attr.u.x);
-    float dvdx = djdx * (prim_attr.v.y - prim_attr.v.x) + dkdx * (prim_attr.v.z - prim_attr.v.x);
-    float dvdy = djdy * (prim_attr.v.y - prim_attr.v.x) + dkdy * (prim_attr.v.z - prim_attr.v.x);
-    float dwdx = djdx * (prim_attr.w.y - prim_attr.w.x) + dkdx * (prim_attr.w.z - prim_attr.w.x);
-    float dwdy = djdy * (prim_attr.w.y - prim_attr.w.x) + dkdy * (prim_attr.w.z - prim_attr.w.x);
-
-    float dUdx = (u + dudx) / (w + dwdx) - u / w;
-    float dUdy = (u + dudy) / (w + dwdy) - u / w;
-    float dVdx = (v + dvdx) / (w + dwdx) - v / w;
-    float dVdy = (v + dvdy) / (w + dwdy) - v / w;
-
-    float f_width = max(abs(dUdx) + abs(dUdy), abs(dVdx) + abs(dVdy));
+    ivec2 uv = ivec2(round(f_uv * 32.0));
+    float dudx = abs(shared_u[gl_LocalInvocationIndex ^ 1u] - f_uv.x);
+    float dudy = abs(shared_u[gl_LocalInvocationIndex ^ 2u] - f_uv.x);
+    float dvdx = abs(shared_v[gl_LocalInvocationIndex ^ 1u] - f_uv.y);
+    float dvdy = abs(shared_v[gl_LocalInvocationIndex ^ 2u] - f_uv.y);
+    float f_width = max(dudx + dudy, dudx + dudy);
     f_width = max(f_width, 1.0);
     float f_lod = log2(f_width);
 
+    //uv -= 16;
+    ivec2 sub_uv = uv & 31;
+    uv >>= 5;
+    uv += ivec2(prim_attr.uv_offset);
+
+    f_uv = vec2(uv) / textureSize(uTexture, 0).xy;
     uvec4 tex = uvec4(255.0 * textureLod(uTexture, f_uv, f_lod));
     if (tex.w < 128u)
     {
-        flag_tiles[tile_instance_index].flag[gl_LocalInvocationIndex] = uint16_t(0);
+        flag_tiles[tile_instance_index].flag[local_y * TILE_WIDTH + local_x] = uint16_t(0);
         return;
     }
-    //tex = uvec4(30.0 * f_lod);
+    tex = uvec4(30.0 * f_lod);
 #if 0
     uvec4 tex_10 = texelFetchOffset(uTexture, uv, 0, ivec2(1, 0));
     uvec4 tex_01 = texelFetchOffset(uTexture, uv, 0, ivec2(0, 1));
@@ -280,7 +280,7 @@ void main()
 
     tex = multiply_unorm8(tex, urgba);
 
-    color_tiles[tile_instance_index].color[gl_LocalInvocationIndex] = u8vec4(tex);
-    depth_tiles[tile_instance_index].depth[gl_LocalInvocationIndex] = uint16_t(z);
-    flag_tiles[tile_instance_index].flag[gl_LocalInvocationIndex] = uint16_t(1);
+    color_tiles[tile_instance_index].color[local_y * TILE_WIDTH + local_x] = u8vec4(tex);
+    depth_tiles[tile_instance_index].depth[local_y * TILE_WIDTH + local_x] = uint16_t(z);
+    flag_tiles[tile_instance_index].flag[local_y * TILE_WIDTH + local_x] = uint16_t(1);
 }
