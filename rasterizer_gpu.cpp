@@ -434,7 +434,6 @@ void RasterizerGPU::Impl::distribute_combiner_work(CommandBuffer &cmd)
 void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 {
 	cmd.begin_region("dispatch-combiner-work");
-	cmd.set_program("assets://shaders/combiner.comp");
 	cmd.set_storage_buffer(0, 0, *raster_work.work_list_per_variant);
 	cmd.set_storage_buffer(0, 1, *tile_instance_data.color);
 	cmd.set_storage_buffer(0, 2, *tile_instance_data.depth);
@@ -443,7 +442,24 @@ void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 	cmd.set_storage_buffer(0, 5, *staging.attributes);
 	cmd.set_texture(1, 0, image->get_view(), StockSampler::TrilinearWrap);
 
-	cmd.dispatch_indirect(*raster_work.item_count_per_variant, 0);
+	auto &features = device->get_device_features();
+	uint32_t subgroup_size = features.subgroup_properties.subgroupSize;
+	const VkSubgroupFeatureFlags required = VK_SUBGROUP_FEATURE_BASIC_BIT |
+	                                        VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
+	                                        VK_SUBGROUP_FEATURE_BALLOT_BIT;
+
+	if ((features.subgroup_properties.supportedOperations & required) == required &&
+	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
+	    subgroup_size >= 4)
+	{
+		cmd.set_program("assets://shaders/combiner.comp", {{ "SUBGROUP", 1 }});
+		cmd.dispatch_indirect(*raster_work.item_count_per_variant, 0);
+	}
+	else
+	{
+		cmd.set_program("assets://shaders/combiner.comp", {{ "SUBGROUP", 0 }});
+		cmd.dispatch_indirect(*raster_work.item_count_per_variant, 0);
+	}
 	cmd.end_region();
 }
 

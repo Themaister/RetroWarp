@@ -3,6 +3,11 @@
 #extension GL_EXT_shader_8bit_storage : require
 #extension GL_EXT_samplerless_texture_functions : require
 
+#if SUBGROUP
+#extension GL_KHR_shader_subgroup_shuffle : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_ballot : require
+#endif
 layout(local_size_x = 256) in;
 
 #include "constants.h"
@@ -141,8 +146,10 @@ ivec2 wrap_uv(ivec2 uv)
     return (uv << 11) >> 11;
 }
 
+#if !SUBGROUP
 shared float shared_u[gl_WorkGroupSize.x];
 shared float shared_v[gl_WorkGroupSize.x];
+#endif
 
 void main()
 {
@@ -154,12 +161,20 @@ void main()
     uint tile_instance_index = work_item.z;
     uint primitive_index = work_item.w;
 
-    uint quad_index = gl_LocalInvocationIndex >> 2u;
+#if SUBGROUP
+    uint local_index = gl_SubgroupInvocationID + gl_SubgroupID * gl_SubgroupSize;
+#else
+    uint local_index = gl_LocalInvocationIndex;
+#endif
+
+    uint quad_index = local_index >> 2u;
     uint quad_x = quad_index & 7u;
     uint quad_y = (quad_index >> 3u) & 7u;
 
-    uint local_x = quad_x * 2u + (gl_LocalInvocationIndex & 1u);
-    uint local_y = quad_y * 2u + ((gl_LocalInvocationIndex >> 1u) & 1u);
+    uint local_x = quad_x * 2u + (local_index & 1u);
+    uint local_y = quad_y * 2u + ((local_index >> 1u) & 1u);
+    uint local_pixel = local_x + local_y * TILE_WIDTH;
+
     int x = int(tile_x * uint(TILE_WIDTH) + local_x);
     int y = int(tile_y * uint(TILE_HEIGHT) + local_y);
 
@@ -193,13 +208,19 @@ void main()
     float w = dot(prim_attr.w, bary);
     w = max(w, 0.00001);
     vec2 f_uv = vec2(u, v) / w;
-    shared_u[gl_LocalInvocationIndex] = f_uv.x;
-    shared_v[gl_LocalInvocationIndex] = f_uv.y;
+
+#if SUBGROUP
+    vec2 f_uv_horiz = subgroupShuffleXor(f_uv, 1);
+    vec2 f_uv_vert = subgroupShuffleXor(f_uv, 2);
+#else
+    shared_u[local_index] = f_uv.x;
+    shared_v[local_index] = f_uv.y;
     barrier();
+#endif
 
     if (y < span_begin_y || y > span_end_y)
     {
-        flag_tiles[tile_instance_index].flag[local_y * TILE_WIDTH + local_x] = uint16_t(0);
+        flag_tiles[tile_instance_index].flag[local_pixel] = uint16_t(0);
         return;
     }
 
@@ -232,7 +253,7 @@ void main()
 
     if (x < start_x || x > end_x)
     {
-        flag_tiles[tile_instance_index].flag[local_y * TILE_WIDTH + local_x] = uint16_t(0);
+        flag_tiles[tile_instance_index].flag[local_pixel] = uint16_t(0);
         return;
     }
 
@@ -247,27 +268,36 @@ void main()
     uvec4 urgba = uvec4(clamp(round(rgba), vec4(0.0), vec4(255.0)));
 
     ivec2 uv = ivec2(round(f_uv * 32.0));
-    float dudx = abs(shared_u[gl_LocalInvocationIndex ^ 1u] - f_uv.x);
-    float dudy = abs(shared_u[gl_LocalInvocationIndex ^ 2u] - f_uv.x);
-    float dvdx = abs(shared_v[gl_LocalInvocationIndex ^ 1u] - f_uv.y);
-    float dvdy = abs(shared_v[gl_LocalInvocationIndex ^ 2u] - f_uv.y);
+
+#if SUBGROUP
+    float dudx = abs(f_uv_horiz.x - f_uv.x);
+    float dudy = abs(f_uv_vert.x - f_uv.x);
+    float dvdx = abs(f_uv_horiz.y - f_uv.y);
+    float dvdy = abs(f_uv_vert.y - f_uv.y);
+#else
+    float dudx = abs(shared_u[local_index ^ 1u] - f_uv.x);
+    float dudy = abs(shared_u[local_index ^ 2u] - f_uv.x);
+    float dvdx = abs(shared_v[local_index ^ 1u] - f_uv.y);
+    float dvdy = abs(shared_v[local_index ^ 2u] - f_uv.y);
+#endif
+
     float f_width = max(dudx + dudy, dudx + dudy);
     f_width = max(f_width, 1.0);
     float f_lod = log2(f_width);
 
     //uv -= 16;
-    ivec2 sub_uv = uv & 31;
-    uv >>= 5;
-    uv += ivec2(prim_attr.uv_offset);
+    //ivec2 sub_uv = uv & 31;
+    //uv >>= 5;
+    uv += 32 * ivec2(prim_attr.uv_offset);
 
-    f_uv = vec2(uv) / textureSize(uTexture, 0).xy;
+    f_uv = vec2(uv) / (32.0 * textureSize(uTexture, 0).xy);
     uvec4 tex = uvec4(255.0 * textureLod(uTexture, f_uv, f_lod));
     if (tex.w < 128u)
     {
-        flag_tiles[tile_instance_index].flag[local_y * TILE_WIDTH + local_x] = uint16_t(0);
+        flag_tiles[tile_instance_index].flag[local_pixel] = uint16_t(0);
         return;
     }
-    tex = uvec4(30.0 * f_lod);
+    //tex = uvec4(30.0 * f_lod);
 #if 0
     uvec4 tex_10 = texelFetchOffset(uTexture, uv, 0, ivec2(1, 0));
     uvec4 tex_01 = texelFetchOffset(uTexture, uv, 0, ivec2(0, 1));
@@ -280,7 +310,7 @@ void main()
 
     tex = multiply_unorm8(tex, urgba);
 
-    color_tiles[tile_instance_index].color[local_y * TILE_WIDTH + local_x] = u8vec4(tex);
-    depth_tiles[tile_instance_index].depth[local_y * TILE_WIDTH + local_x] = uint16_t(z);
-    flag_tiles[tile_instance_index].flag[local_y * TILE_WIDTH + local_x] = uint16_t(1);
+    color_tiles[tile_instance_index].color[local_pixel] = u8vec4(tex);
+    depth_tiles[tile_instance_index].depth[local_pixel] = uint16_t(z);
+    flag_tiles[tile_instance_index].flag[local_pixel] = uint16_t(1);
 }
