@@ -54,6 +54,8 @@ void main()
         uint scan_result = total_primitives + subgroupInclusiveAdd(bit_count) - bit_count;
         if (mask_index < num_masks)
             tile_prefix_sums[mask_index + base_offset] = uint16_t(scan_result);
+
+        // Could just broadcast last element of InclusiveAdd, but the ID has to be a compile time constant <___<.
         total_primitives += subgroupAdd(bit_count);
     }
     if (subgroupElect())
