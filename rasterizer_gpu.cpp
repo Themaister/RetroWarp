@@ -403,7 +403,6 @@ void RasterizerGPU::Impl::finalize_tile_offsets(CommandBuffer &cmd)
 void RasterizerGPU::Impl::distribute_combiner_work(CommandBuffer &cmd)
 {
 	cmd.begin_region("distribute-combiner-work");
-	cmd.set_program("assets://shaders/distribute_combiner_work.comp");
 	cmd.set_storage_buffer(0, 0, *tile_count.tile_offset);
 	cmd.set_storage_buffer(0, 1, *tile_count.tile_prefix_sum);
 	cmd.set_storage_buffer(0, 2, *binning.mask_buffer);
@@ -412,7 +411,23 @@ void RasterizerGPU::Impl::distribute_combiner_work(CommandBuffer &cmd)
 
 	unsigned num_tiles_x = (width + TILE_WIDTH - 1) / TILE_WIDTH;
 	unsigned num_tiles_y = (height + TILE_HEIGHT - 1) / TILE_HEIGHT;
-	cmd.dispatch(num_tiles_x, num_tiles_y, 1);
+
+	auto &features = device->get_device_features();
+	const VkSubgroupFeatureFlags required = VK_SUBGROUP_FEATURE_BASIC_BIT |
+	                                        VK_SUBGROUP_FEATURE_BALLOT_BIT;
+
+	if ((features.subgroup_properties.supportedOperations & required) == required &&
+	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0)
+	{
+		cmd.set_program("assets://shaders/distribute_combiner_work.comp", {{ "SUBGROUP", 1 }});
+		cmd.dispatch(num_tiles_x, num_tiles_y, 1);
+	}
+	else
+	{
+		cmd.set_program("assets://shaders/distribute_combiner_work.comp", {{ "SUBGROUP", 0 }});
+		cmd.dispatch(num_tiles_x, num_tiles_y, 1);
+	}
+
 	cmd.end_region();
 }
 

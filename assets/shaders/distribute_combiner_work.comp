@@ -1,5 +1,9 @@
 #version 450
 #extension GL_EXT_shader_16bit_storage : require
+
+#if SUBGROUP
+#extension GL_KHR_shader_subgroup_ballot : require
+#endif
 layout(local_size_x = 64) in;
 
 #include "constants.h"
@@ -37,6 +41,30 @@ layout(std430, set = 0, binding = 4) writeonly buffer WorkList
     u16vec4 tile_raster_work[];
 };
 
+#if SUBGROUP
+uint allocate_work_offset(uint variant_index)
+{
+    // Merge atomic operations.
+    for (;;)
+    {
+        if (subgroupBroadcastFirst(variant_index) == variant_index)
+        {
+            uvec4 active_mask = subgroupBallot(true);
+            uint work_offset;
+            if (subgroupElect())
+            {
+                uint count = subgroupBallotBitCount(active_mask);
+                work_offset = atomicAdd(item_counts_per_variant[variant_index].x, count);
+            }
+
+            work_offset = subgroupBroadcastFirst(work_offset);
+            work_offset += subgroupBallotExclusiveBitCount(active_mask);
+            return work_offset;
+        }
+    }
+}
+#endif
+
 void main()
 {
     ivec2 tile = ivec2(gl_WorkGroupID.xy);
@@ -61,9 +89,19 @@ void main()
             mask &= ~(1u << bit_index);
             uint primitive_index = mask_index * 32u + bit_index;
 
-            uint work_index = atomicAdd(item_counts_per_variant[0].x, 1u);
-            tile_raster_work[work_index] = u16vec4(uvec4(tile.x, tile.y, tile_instance_offset, primitive_index));
+            uint variant_index = 0u;
+
+#if SUBGROUP
+            uint work_offset = allocate_work_offset(variant_index);
+            tile_raster_work[work_offset + uint(TILE_INSTANCE_STRIDE) * variant_index] =
+                u16vec4(uvec4(tile.x, tile.y, tile_instance_offset, primitive_index));
             tile_instance_offset++;
+#else
+            uint work_index = atomicAdd(item_counts_per_variant[variant_index].x, 1u);
+            tile_raster_work[work_index + uint(TILE_INSTANCE_STRIDE) * variant_index] =
+                u16vec4(uvec4(tile.x, tile.y, tile_instance_offset, primitive_index));
+            tile_instance_offset++;
+#endif
         }
     }
 }
