@@ -337,14 +337,33 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd)
 void RasterizerGPU::Impl::run_per_tile_prefix_sum(CommandBuffer &cmd)
 {
 	cmd.begin_region("run-per-tile-prefix-sum");
-	cmd.set_program("assets://shaders/tile_prefix_sum.comp");
+
 	cmd.set_storage_buffer(0, 0, *binning.mask_buffer);
 	cmd.set_storage_buffer(0, 1, *tile_count.tile_prefix_sum);
 	cmd.set_storage_buffer(0, 2, *tile_count.tile_total);
 
 	unsigned tiles_x = (width + TILE_WIDTH - 1) / TILE_WIDTH;
 	unsigned tiles_y = (height + TILE_HEIGHT - 1) / TILE_HEIGHT;
-	cmd.dispatch(tiles_x, tiles_y, 1);
+
+	auto &features = device->get_device_features();
+	uint32_t subgroup_size = features.subgroup_properties.subgroupSize;
+	const VkSubgroupFeatureFlags required = VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
+	                                        VK_SUBGROUP_FEATURE_BASIC_BIT |
+	                                        VK_SUBGROUP_FEATURE_BALLOT_BIT;
+
+	if ((features.subgroup_properties.supportedOperations & required) == required &&
+	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0)
+	{
+		cmd.set_program("assets://shaders/tile_prefix_sum.comp", {{ "SUBGROUP", 1 }});
+		cmd.set_specialization_constant_mask(1);
+		cmd.set_specialization_constant(0, subgroup_size);
+		cmd.dispatch(tiles_x, tiles_y, 1);
+	}
+	else
+	{
+		cmd.set_program("assets://shaders/tile_prefix_sum.comp", {{ "SUBGROUP", 0 }});
+		cmd.dispatch(tiles_x, tiles_y, 1);
+	}
 	cmd.end_region();
 }
 
