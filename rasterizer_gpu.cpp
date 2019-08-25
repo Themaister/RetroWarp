@@ -279,14 +279,21 @@ void RasterizerGPU::Impl::binning_low_res_prepass(CommandBuffer &cmd)
 	const VkSubgroupFeatureFlags required = VK_SUBGROUP_FEATURE_BALLOT_BIT | VK_SUBGROUP_FEATURE_BASIC_BIT;
 	if ((features.subgroup_properties.supportedOperations & required) == required &&
 	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
-	    (subgroup_size == 32 || subgroup_size == 64))
+	    can_support_minimum_subgroup_size(subgroup_size) && subgroup_size <= 64)
 	{
 		cmd.set_program("assets://shaders/binning_low_res.comp", {{ "SUBGROUP", 1 }});
 		cmd.set_specialization_constant_mask(1);
 		cmd.set_specialization_constant(0, subgroup_size);
+
+		if (supports_subgroup_size_control())
+		{
+			cmd.enable_subgroup_size_control(true);
+			cmd.set_subgroup_size_log2(true, trailing_zeroes(subgroup_size), trailing_zeroes(subgroup_size));
+		}
 		cmd.dispatch((staging.count + subgroup_size - 1) / subgroup_size,
 		             (width + 4 * TILE_WIDTH - 1) / (4 * TILE_WIDTH),
 		             (height + 4 * TILE_HEIGHT - 1) / (4 * TILE_HEIGHT));
+		cmd.enable_subgroup_size_control(false);
 	}
 	else
 	{
@@ -315,7 +322,7 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd)
 	const VkSubgroupFeatureFlags required = VK_SUBGROUP_FEATURE_BALLOT_BIT | VK_SUBGROUP_FEATURE_BASIC_BIT;
 	if ((features.subgroup_properties.supportedOperations & required) == required &&
 	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
-	    can_support_minimum_subgroup_size(32) && subgroup_size <= 64)
+	    can_support_minimum_subgroup_size(subgroup_size) && subgroup_size <= 64)
 	{
 		cmd.set_program("assets://shaders/binning.comp", {{ "SUBGROUP", 1 }});
 		cmd.set_specialization_constant_mask(1);
@@ -324,7 +331,7 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd)
 		if (supports_subgroup_size_control())
 		{
 			cmd.enable_subgroup_size_control(true);
-			cmd.set_subgroup_size_log2(true, 5, 6);
+			cmd.set_subgroup_size_log2(true, trailing_zeroes(subgroup_size), trailing_zeroes(subgroup_size));
 		}
 
 		cmd.dispatch((num_masks + subgroup_size - 1) / subgroup_size,
