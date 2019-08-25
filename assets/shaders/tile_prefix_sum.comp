@@ -48,7 +48,10 @@ void main()
         uint bit_count = 0u;
         uint mask_index = i + local_index;
         if (mask_index < num_masks)
-            bit_count = uint(bitCount(mask_buffer[mask_index + base_offset]));
+        {
+            uint count = mask_buffer[mask_index + base_offset];
+            bit_count = uint(bitCount(count));
+        }
 
         // subgroupExclusiveAdd is broken on current RADV + Navi.
         uint scan_result = total_primitives + subgroupInclusiveAdd(bit_count) - bit_count;

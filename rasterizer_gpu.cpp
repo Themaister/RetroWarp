@@ -112,6 +112,9 @@ struct RasterizerGPU::Impl
 	void run_rop(CommandBuffer &cmd);
 
 	void test_prefix_sum();
+
+	bool can_support_minimum_subgroup_size(unsigned size) const;
+	bool supports_subgroup_size_control() const;
 };
 
 struct FBInfo
@@ -312,15 +315,23 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd)
 	const VkSubgroupFeatureFlags required = VK_SUBGROUP_FEATURE_BALLOT_BIT | VK_SUBGROUP_FEATURE_BASIC_BIT;
 	if ((features.subgroup_properties.supportedOperations & required) == required &&
 	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
-	    (subgroup_size == 32 || subgroup_size == 64))
+	    can_support_minimum_subgroup_size(32) && subgroup_size <= 64)
 	{
 		cmd.set_program("assets://shaders/binning.comp", {{ "SUBGROUP", 1 }});
 		cmd.set_specialization_constant_mask(1);
 		cmd.set_specialization_constant(0, subgroup_size);
 
+		if (supports_subgroup_size_control())
+		{
+			cmd.enable_subgroup_size_control(true);
+			cmd.set_subgroup_size_log2(true, 5, 6);
+		}
+
 		cmd.dispatch((num_masks + subgroup_size - 1) / subgroup_size,
 		             (width + TILE_WIDTH - 1) / TILE_WIDTH,
 		             (height + TILE_HEIGHT - 1) / TILE_HEIGHT);
+
+		cmd.enable_subgroup_size_control(false);
 	}
 	else
 	{
@@ -352,12 +363,20 @@ void RasterizerGPU::Impl::run_per_tile_prefix_sum(CommandBuffer &cmd)
 	                                        VK_SUBGROUP_FEATURE_BALLOT_BIT;
 
 	if ((features.subgroup_properties.supportedOperations & required) == required &&
-	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0)
+	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
+	    can_support_minimum_subgroup_size(16))
 	{
 		cmd.set_program("assets://shaders/tile_prefix_sum.comp", {{ "SUBGROUP", 1 }});
 		cmd.set_specialization_constant_mask(1);
 		cmd.set_specialization_constant(0, subgroup_size);
+
+		if (supports_subgroup_size_control())
+		{
+			cmd.set_subgroup_size_log2(true, 4, 7);
+			cmd.enable_subgroup_size_control(true);
+		}
 		cmd.dispatch(tiles_x, tiles_y, 1);
+		cmd.enable_subgroup_size_control(false);
 	}
 	else
 	{
@@ -431,6 +450,38 @@ void RasterizerGPU::Impl::distribute_combiner_work(CommandBuffer &cmd)
 	cmd.end_region();
 }
 
+bool RasterizerGPU::Impl::can_support_minimum_subgroup_size(unsigned size) const
+{
+	// Vendor specific. AMD and NV have fixed subgroup sizes, no need to check for extension.
+	uint32_t vendor_id = device->get_gpu_properties().vendorID;
+	if (vendor_id == VENDOR_ID_AMD && size <= 64)
+		return true;
+	else if (vendor_id == VENDOR_ID_NVIDIA && size <= 32)
+		return true;
+
+	if (!supports_subgroup_size_control())
+		return false;
+
+	auto &features = device->get_device_features();
+
+	if (size > features.subgroup_size_control_properties.maxSubgroupSize)
+		return false;
+
+	return true;
+}
+
+bool RasterizerGPU::Impl::supports_subgroup_size_control() const
+{
+	auto &features = device->get_device_features();
+
+	if ((features.subgroup_size_control_properties.requiredSubgroupSizeStages & VK_SHADER_STAGE_COMPUTE_BIT) == 0)
+		return false;
+	if (!features.subgroup_size_control_features.computeFullSubgroups)
+		return false;
+
+	return true;
+}
+
 void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 {
 	cmd.begin_region("dispatch-combiner-work");
@@ -450,10 +501,18 @@ void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 
 	if ((features.subgroup_properties.supportedOperations & required) == required &&
 	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
-	    subgroup_size >= 4)
+	    can_support_minimum_subgroup_size(4))
 	{
 		cmd.set_program("assets://shaders/combiner.comp", {{ "SUBGROUP", 1 }});
+
+		if (supports_subgroup_size_control())
+		{
+			cmd.set_subgroup_size_log2(true, 2, 7);
+			cmd.enable_subgroup_size_control(true);
+		}
+
 		cmd.dispatch_indirect(*raster_work.item_count_per_variant, 0);
+		cmd.enable_subgroup_size_control(false);
 	}
 	else
 	{
