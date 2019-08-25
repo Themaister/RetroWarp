@@ -364,7 +364,7 @@ void RasterizerGPU::Impl::run_per_tile_prefix_sum(CommandBuffer &cmd)
 
 	if ((features.subgroup_properties.supportedOperations & required) == required &&
 	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
-	    can_support_minimum_subgroup_size(16))
+	    can_support_minimum_subgroup_size(subgroup_size))
 	{
 		cmd.set_program("assets://shaders/tile_prefix_sum.comp", {{ "SUBGROUP", 1 }});
 		cmd.set_specialization_constant_mask(1);
@@ -372,7 +372,9 @@ void RasterizerGPU::Impl::run_per_tile_prefix_sum(CommandBuffer &cmd)
 
 		if (supports_subgroup_size_control())
 		{
-			cmd.set_subgroup_size_log2(true, 4, 7);
+			cmd.set_subgroup_size_log2(true,
+			                           trailing_zeroes(subgroup_size),
+			                           trailing_zeroes(subgroup_size));
 			cmd.enable_subgroup_size_control(true);
 		}
 		cmd.dispatch(tiles_x, tiles_y, 1);
