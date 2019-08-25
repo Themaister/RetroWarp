@@ -1,9 +1,18 @@
 #version 450
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_8bit_storage : require
+
+#if SUBGROUP
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_ballot : require
 layout(local_size_x_id = 0) in;
+#else
+layout(local_size_x = 32) in;
+#endif
+
+#if !SUBGROUP
+shared uint merged_mask;
+#endif
 
 #include "primitive_setup.h"
 #include "constants.h"
@@ -105,6 +114,7 @@ void main()
     if (primitive_index < fb_info.primitive_count)
         bin_to_tile = bin_primitive(base_coord, end_coord, primitive_index);
 
+#if SUBGROUP
     uvec4 ballot_result = subgroupBallot(bin_to_tile);
     if (subgroupElect())
     {
@@ -120,4 +130,22 @@ void main()
             binned_bitmask[binned_bitmask_offset + gl_WorkGroupID.x] = ballot_result.x;
         }
     }
+#else
+    // TODO: Subgroup ballot would be much nicer here.
+    if (local_index == 0u)
+        merged_mask = 0u;
+    barrier();
+
+    if (bin_to_tile)
+    atomicOr(merged_mask, 1u << local_index);
+
+    barrier();
+
+    if (local_index == 0u)
+    {
+        int linear_tile = tile.y * MAX_TILES_X_LOW_RES + tile.x;
+        uint binned_bitmask_offset = uint(TILE_BINNING_STRIDE * linear_tile);
+        binned_bitmask[binned_bitmask_offset + gl_WorkGroupID.x] = merged_mask;
+    }
+#endif
 }
