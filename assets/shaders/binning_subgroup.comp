@@ -1,7 +1,9 @@
 #version 450
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_8bit_storage : require
-layout(local_size_x = 32) in;
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_ballot : require
+layout(local_size_x_id = 0) in;
 
 #include "primitive_setup.h"
 #include "constants.h"
@@ -17,7 +19,10 @@ layout(std430, set = 0, binding = 1) readonly buffer TriangleSetupPos
     PrimitiveSetupPos primitives_pos[];
 };
 
-shared uint merged_mask;
+layout(std430, set = 0, binding = 2) readonly buffer TileBitmaskLowRes
+{
+    uint binned_bitmask_low_res[];
+};
 
 #define prim primitives_pos[index]
 ivec2 interpolate_x(int index, int y_sub)
@@ -95,30 +100,34 @@ bool bin_primitive(ivec2 start, ivec2 end, int index)
 void main()
 {
     ivec2 tile = ivec2(gl_WorkGroupID.yz);
-    ivec2 base_coord = tile * ivec2(TILE_WIDTH * 4, TILE_HEIGHT * 4);
-    ivec2 end_coord = min(base_coord + ivec2(TILE_WIDTH * 4, TILE_HEIGHT * 4), ivec2(fb_info.resolution));
+    ivec2 base_coord = tile * ivec2(TILE_WIDTH, TILE_HEIGHT);
+    ivec2 end_coord = min(base_coord + ivec2(TILE_WIDTH, TILE_HEIGHT), ivec2(fb_info.resolution));
 
     int primitive_index = int(gl_GlobalInvocationID.x);
-    uint local_index = gl_LocalInvocationIndex;
+    uint local_index = gl_SubgroupInvocationID;
 
     bool bin_to_tile = false;
     if (primitive_index < fb_info.primitive_count)
-        bin_to_tile = bin_primitive(base_coord, end_coord, primitive_index);
-
-    // TODO: Subgroup ballot would be much nicer here.
-    if (local_index == 0u)
-        merged_mask = 0u;
-    barrier();
-
-    if (bin_to_tile)
-        atomicOr(merged_mask, 1u << local_index);
-
-    barrier();
-
-    if (local_index == 0u)
     {
-        int linear_tile = tile.y * MAX_TILES_X_LOW_RES + tile.x;
+        int linear_tile_lowres = (tile.y >> 2) * MAX_TILES_X_LOW_RES + (tile.x >> 2);
+        int binned_bitmask_offset = linear_tile_lowres * TILE_BINNING_STRIDE + (primitive_index >> 5);
+        if ((binned_bitmask_low_res[binned_bitmask_offset] & (1 << (primitive_index & 31))) != 0)
+            bin_to_tile = bin_primitive(base_coord, end_coord, primitive_index);
+    }
+
+    uvec4 ballot_result = subgroupBallot(bin_to_tile);
+    if (subgroupElect())
+    {
+        int linear_tile = tile.y * MAX_TILES_X + tile.x;
         uint binned_bitmask_offset = uint(TILE_BINNING_STRIDE * linear_tile);
-        binned_bitmask[binned_bitmask_offset + gl_WorkGroupID.x] = merged_mask;
+        if (gl_SubgroupSize == 64u)
+        {
+            binned_bitmask[binned_bitmask_offset + 2u * gl_WorkGroupID.x] = ballot_result.x;
+            binned_bitmask[binned_bitmask_offset + 2u * gl_WorkGroupID.x + 1u] = ballot_result.y;
+        }
+        else if (gl_SubgroupSize == 32u)
+        {
+            binned_bitmask[binned_bitmask_offset + gl_WorkGroupID.x] = ballot_result.x;
+        }
     }
 }

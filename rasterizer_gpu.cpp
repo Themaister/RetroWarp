@@ -268,25 +268,67 @@ void RasterizerGPU::Impl::clear_indirect_buffer(CommandBuffer &cmd)
 void RasterizerGPU::Impl::binning_low_res_prepass(CommandBuffer &cmd)
 {
 	cmd.begin_region("binning-low-res-prepass");
-	cmd.set_program("assets://shaders/binning_low_res.comp");
 	cmd.set_storage_buffer(0, 0, *binning.mask_buffer_low_res);
 	cmd.set_storage_buffer(0, 1, *staging.positions);
-	cmd.dispatch((staging.count + 63) / 64,
-	             (width + 4 * TILE_WIDTH - 1) / (4 * TILE_WIDTH),
-	             (height + 4 * TILE_HEIGHT - 1) / (4 * TILE_HEIGHT));
+
+	auto &features = device->get_device_features();
+	uint32_t subgroup_size = features.subgroup_properties.subgroupSize;
+
+	const VkSubgroupFeatureFlags required = VK_SUBGROUP_FEATURE_BALLOT_BIT | VK_SUBGROUP_FEATURE_BASIC_BIT;
+	if ((features.subgroup_properties.supportedOperations & required) == required &&
+	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
+	    (subgroup_size == 32 || subgroup_size == 64))
+	{
+		cmd.set_program("assets://shaders/binning_low_res_subgroup.comp");
+		cmd.set_specialization_constant_mask(1);
+		cmd.set_specialization_constant(0, subgroup_size);
+		cmd.dispatch((staging.count + subgroup_size - 1) / subgroup_size,
+		             (width + 4 * TILE_WIDTH - 1) / (4 * TILE_WIDTH),
+		             (height + 4 * TILE_HEIGHT - 1) / (4 * TILE_HEIGHT));
+	}
+	else
+	{
+		// Fallback with shared memory.
+		cmd.set_program("assets://shaders/binning_low_res.comp");
+		cmd.dispatch((staging.count + 31) / 32,
+		             (width + 4 * TILE_WIDTH - 1) / (4 * TILE_WIDTH),
+		             (height + 4 * TILE_HEIGHT - 1) / (4 * TILE_HEIGHT));
+	}
 	cmd.end_region();
 }
 
 void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd)
 {
 	cmd.begin_region("binning-full-res");
-	cmd.set_program("assets://shaders/binning.comp");
 	cmd.set_storage_buffer(0, 0, *binning.mask_buffer);
 	cmd.set_storage_buffer(0, 1, *staging.positions);
 	cmd.set_storage_buffer(0, 2, *binning.mask_buffer_low_res);
-	cmd.dispatch((staging.count + 63) / 64,
-	             (width + TILE_WIDTH - 1) / TILE_WIDTH,
-	             (height + TILE_HEIGHT - 1) / TILE_HEIGHT);
+
+	auto &features = device->get_device_features();
+	uint32_t subgroup_size = features.subgroup_properties.subgroupSize;
+
+	const VkSubgroupFeatureFlags required = VK_SUBGROUP_FEATURE_BALLOT_BIT | VK_SUBGROUP_FEATURE_BASIC_BIT;
+	if ((features.subgroup_properties.supportedOperations & required) == required &&
+	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
+	    (subgroup_size == 32 || subgroup_size == 64))
+	{
+		cmd.set_program("assets://shaders/binning_subgroup.comp");
+		cmd.set_specialization_constant_mask(1);
+		cmd.set_specialization_constant(0, subgroup_size);
+
+		cmd.dispatch((staging.count + subgroup_size - 1) / subgroup_size,
+		             (width + TILE_WIDTH - 1) / TILE_WIDTH,
+		             (height + TILE_HEIGHT - 1) / TILE_HEIGHT);
+	}
+	else
+	{
+		// Fallback with shared memory.
+		cmd.set_program("assets://shaders/binning.comp");
+		cmd.dispatch((staging.count + 31) / 32,
+		             (width + TILE_WIDTH - 1) / TILE_WIDTH,
+		             (height + TILE_HEIGHT - 1) / TILE_HEIGHT);
+	}
+
 	cmd.end_region();
 }
 

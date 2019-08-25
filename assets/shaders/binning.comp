@@ -1,7 +1,7 @@
 #version 450
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_8bit_storage : require
-layout(local_size_x = 64) in;
+layout(local_size_x = 32) in;
 
 #include "primitive_setup.h"
 #include "constants.h"
@@ -22,7 +22,7 @@ layout(std430, set = 0, binding = 2) readonly buffer TileBitmaskLowRes
     uint binned_bitmask_low_res[];
 };
 
-shared uint merged_mask[2];
+shared uint merged_mask;
 
 #define prim primitives_pos[index]
 ivec2 interpolate_x(int index, int y_sub)
@@ -116,21 +116,19 @@ void main()
     }
 
     // TODO: Subgroup ballot would be much nicer here.
-    if (local_index < 2u)
-        merged_mask[local_index] = 0u;
+    if (local_index == 0u)
+        merged_mask = 0u;
     barrier();
 
-    uint bit_index = local_index & 31u;
-    uint uint_index = local_index >> 5u;
     if (bin_to_tile)
-        atomicOr(merged_mask[uint_index], 1u << bit_index);
+        atomicOr(merged_mask, 1u << local_index);
 
     barrier();
 
-    if (local_index < 2u)
+    if (local_index == 0u)
     {
         int linear_tile = tile.y * MAX_TILES_X + tile.x;
         uint binned_bitmask_offset = uint(TILE_BINNING_STRIDE * linear_tile);
-        binned_bitmask[binned_bitmask_offset + (gl_WorkGroupID.x << 1u) + local_index] = merged_mask[local_index];
+        binned_bitmask[binned_bitmask_offset + gl_WorkGroupID.x] = merged_mask;
     }
 }
