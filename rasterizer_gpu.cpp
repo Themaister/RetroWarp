@@ -278,7 +278,7 @@ void RasterizerGPU::Impl::binning_low_res_prepass(CommandBuffer &cmd)
 	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
 	    (subgroup_size == 32 || subgroup_size == 64))
 	{
-		cmd.set_program("assets://shaders/binning_low_res_subgroup.comp", {{ "SUBGROUP", 1 }});
+		cmd.set_program("assets://shaders/binning_low_res.comp", {{ "SUBGROUP", 1 }});
 		cmd.set_specialization_constant_mask(1);
 		cmd.set_specialization_constant(0, subgroup_size);
 		cmd.dispatch((staging.count + subgroup_size - 1) / subgroup_size,
@@ -288,7 +288,7 @@ void RasterizerGPU::Impl::binning_low_res_prepass(CommandBuffer &cmd)
 	else
 	{
 		// Fallback with shared memory.
-		cmd.set_program("assets://shaders/binning_low_res_subgroup.comp", {{ "SUBGROUP", 0 }});
+		cmd.set_program("assets://shaders/binning_low_res.comp", {{ "SUBGROUP", 0 }});
 		cmd.dispatch((staging.count + 31) / 32,
 		             (width + 4 * TILE_WIDTH - 1) / (4 * TILE_WIDTH),
 		             (height + 4 * TILE_HEIGHT - 1) / (4 * TILE_HEIGHT));
@@ -314,7 +314,7 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd)
 	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
 	    (subgroup_size == 32 || subgroup_size == 64))
 	{
-		cmd.set_program("assets://shaders/binning_subgroup.comp", {{ "SUBGROUP", 1 }});
+		cmd.set_program("assets://shaders/binning.comp", {{ "SUBGROUP", 1 }});
 		cmd.set_specialization_constant_mask(1);
 		cmd.set_specialization_constant(0, subgroup_size);
 
@@ -325,7 +325,7 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd)
 	else
 	{
 		// Fallback with shared memory.
-		cmd.set_program("assets://shaders/binning_subgroup.comp", {{ "SUBGROUP", 0 }});
+		cmd.set_program("assets://shaders/binning.comp", {{ "SUBGROUP", 0 }});
 		cmd.dispatch((num_masks + 31) / 32,
 		             (width + TILE_WIDTH - 1) / TILE_WIDTH,
 		             (height + TILE_HEIGHT - 1) / TILE_HEIGHT);
