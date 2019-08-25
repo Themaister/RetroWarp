@@ -108,7 +108,12 @@ void main()
     ivec2 end_coord = min(base_coord + ivec2(TILE_WIDTH * 4, TILE_HEIGHT * 4), ivec2(fb_info.resolution));
 
     int primitive_index = int(gl_GlobalInvocationID.x);
+
+#if SUBGROUP
     uint local_index = gl_SubgroupInvocationID;
+#else
+    uint local_index = gl_LocalInvocationIndex;
+#endif
 
     bool bin_to_tile = false;
     if (primitive_index < fb_info.primitive_count)

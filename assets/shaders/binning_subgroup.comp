@@ -119,7 +119,11 @@ void main()
 
     int mask_index = int(gl_GlobalInvocationID.x);
     int linear_tile = tile.y * MAX_TILES_X + tile.x;
+#if SUBGROUP
     uint local_index = gl_SubgroupInvocationID;
+#else
+    uint local_index = gl_LocalInvocationIndex;
+#endif
 
     bool group_bin_to_tile = false;
     if (mask_index < fb_info.primitive_count_32)
