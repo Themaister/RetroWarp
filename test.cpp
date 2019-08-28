@@ -286,7 +286,9 @@ void SWRenderApplication::render_frame(double, double)
 	TextureSampler sampler;
 	rasterizer.set_sampler(&sampler);
 
-	auto &renderables = scene.get_entity_pool().get_component_group<SoftwareRenderableComponent, RenderInfoComponent>();
+	unsigned current_binding = 0;
+
+	auto &renderables = scene.get_entity_pool().get_component_group<RenderableComponent, SoftwareRenderableComponent, RenderInfoComponent>();
 	for (auto &renderable : renderables)
 	{
 		auto &m = get_component<RenderInfoComponent>(renderable)->transform->world_transform;
@@ -295,7 +297,14 @@ void SWRenderApplication::render_frame(double, double)
 		auto *sw = get_component<SoftwareRenderableComponent>(renderable);
 		sampler.layout = &sw->color_texture.get_layout();
 
-		rasterizer_gpu.upload_texture(sw->color_texture.get_layout());
+		auto *render = get_component<RenderableComponent>(renderable);
+		auto *static_mesh = dynamic_cast<ImportedMesh *>(render->renderable.get());
+		if (!static_mesh)
+			continue;
+
+		auto *gpu_texture = static_mesh->material->textures[Util::ecast(Material::Textures::BaseColor)];
+		rasterizer_gpu.set_state_index(current_binding);
+		rasterizer_gpu.set_texture(current_binding, gpu_texture->get_image()->get_view());
 
 #if 1
 		size_t vertex_count = sw->vertices.size();
@@ -313,6 +322,13 @@ void SWRenderApplication::render_frame(double, double)
 			rasterizer_gpu.rasterize_primitives(setups, count);
 		}
 #endif
+
+		current_binding++;
+		if (current_binding == RasterizerGPU::NUM_STATE_INDICES)
+		{
+			rasterizer_gpu.flush();
+			current_binding = 0;
+		}
 	}
 
 	//rop.fill_alpha_opaque();

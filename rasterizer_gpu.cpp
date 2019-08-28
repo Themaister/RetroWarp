@@ -19,7 +19,6 @@ struct BBox
 struct RasterizerGPU::Impl
 {
 	Device *device;
-	ImageHandle image;
 	BufferHandle color_buffer;
 	BufferHandle depth_buffer;
 	unsigned width = 0;
@@ -64,8 +63,10 @@ struct RasterizerGPU::Impl
 	{
 		BufferHandle positions;
 		BufferHandle attributes;
+		BufferHandle state_index;
 		PrimitiveSetupPos *mapped_positions = nullptr;
 		PrimitiveSetupAttr *mapped_attributes = nullptr;
+		uint8_t *mapped_state_index = nullptr;
 		unsigned count = 0;
 		unsigned num_conservative_tile_instances = 0;
 	} staging;
@@ -80,6 +81,13 @@ struct RasterizerGPU::Impl
 	{
 		int x, y, width, height;
 	} scissor;
+
+	struct
+	{
+		const ImageView *image_views[16] = {};
+		unsigned current_state_index = 0;
+		bool active_state_indices[16] = {};
+	} state;
 
 	void init(Device &device);
 
@@ -235,6 +243,8 @@ void RasterizerGPU::Impl::begin_staging()
 	staging.positions = device->create_buffer(info);
 	info.size = MAX_PRIMITIVES * sizeof(PrimitiveSetupAttr);
 	staging.attributes = device->create_buffer(info);
+	info.size = MAX_PRIMITIVES * sizeof(uint8_t);
+	staging.state_index = device->create_buffer(info);
 
 	staging.mapped_positions = static_cast<PrimitiveSetupPos *>(
 			device->map_host_buffer(*staging.positions,
@@ -242,6 +252,9 @@ void RasterizerGPU::Impl::begin_staging()
 	staging.mapped_attributes = static_cast<PrimitiveSetupAttr *>(
 			device->map_host_buffer(*staging.attributes,
 			                       MEMORY_ACCESS_WRITE_BIT));
+	staging.mapped_state_index = static_cast<uint8_t *>(
+			device->map_host_buffer(*staging.state_index,
+			                        MEMORY_ACCESS_WRITE_BIT));
 
 	staging.count = 0;
 	staging.num_conservative_tile_instances = 0;
@@ -253,9 +266,12 @@ void RasterizerGPU::Impl::end_staging()
 		device->unmap_host_buffer(*staging.positions, MEMORY_ACCESS_WRITE_BIT);
 	if (staging.mapped_attributes)
 		device->unmap_host_buffer(*staging.attributes, MEMORY_ACCESS_WRITE_BIT);
+	if (staging.mapped_state_index)
+		device->unmap_host_buffer(*staging.state_index, MEMORY_ACCESS_WRITE_BIT);
 
 	staging.mapped_positions = nullptr;
 	staging.mapped_attributes = nullptr;
+	staging.mapped_state_index = nullptr;
 }
 
 void RasterizerGPU::Impl::clear_indirect_buffer(CommandBuffer &cmd)
@@ -436,6 +452,7 @@ void RasterizerGPU::Impl::distribute_combiner_work(CommandBuffer &cmd)
 	cmd.set_storage_buffer(0, 2, *binning.mask_buffer);
 	cmd.set_storage_buffer(0, 3, *raster_work.item_count_per_variant);
 	cmd.set_storage_buffer(0, 4, *raster_work.work_list_per_variant);
+	cmd.set_storage_buffer(0, 5, *staging.state_index);
 
 	unsigned num_tiles_x = (width + TILE_WIDTH - 1) / TILE_WIDTH;
 	unsigned num_tiles_y = (height + TILE_HEIGHT - 1) / TILE_HEIGHT;
@@ -494,39 +511,49 @@ bool RasterizerGPU::Impl::supports_subgroup_size_control() const
 void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 {
 	cmd.begin_region("dispatch-combiner-work");
-	cmd.set_storage_buffer(0, 0, *raster_work.work_list_per_variant);
 	cmd.set_storage_buffer(0, 1, *tile_instance_data.color);
 	cmd.set_storage_buffer(0, 2, *tile_instance_data.depth);
 	cmd.set_storage_buffer(0, 3, *tile_instance_data.flags);
 	cmd.set_storage_buffer(0, 4, *staging.positions);
 	cmd.set_storage_buffer(0, 5, *staging.attributes);
-	cmd.set_texture(1, 0, image->get_view(), StockSampler::TrilinearWrap);
 
-	auto &features = device->get_device_features();
-	uint32_t subgroup_size = features.subgroup_properties.subgroupSize;
-	const VkSubgroupFeatureFlags required = VK_SUBGROUP_FEATURE_BASIC_BIT |
-	                                        VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
-	                                        VK_SUBGROUP_FEATURE_BALLOT_BIT;
-
-	if ((features.subgroup_properties.supportedOperations & required) == required &&
-	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
-	    can_support_minimum_subgroup_size(4))
+	for (unsigned variant = 0; variant < NUM_STATE_INDICES; variant++)
 	{
-		cmd.set_program("assets://shaders/combiner.comp", {{ "SUBGROUP", 1 }});
+		if (!state.active_state_indices[variant])
+			continue;
 
-		if (supports_subgroup_size_control())
+		cmd.set_storage_buffer(0, 0, *raster_work.work_list_per_variant,
+		                       variant * (MAX_NUM_TILE_INSTANCES + 1) * sizeof(TileRasterWork),
+		                       (MAX_NUM_TILE_INSTANCES + 1) * sizeof(TileRasterWork));
+		assert(state.image_views[variant]);
+		cmd.set_texture(1, 0, *state.image_views[variant], StockSampler::TrilinearWrap);
+
+		auto &features = device->get_device_features();
+		uint32_t subgroup_size = features.subgroup_properties.subgroupSize;
+		const VkSubgroupFeatureFlags required = VK_SUBGROUP_FEATURE_BASIC_BIT |
+		                                        VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
+		                                        VK_SUBGROUP_FEATURE_BALLOT_BIT;
+
+		if ((features.subgroup_properties.supportedOperations & required) == required &&
+		    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
+		    can_support_minimum_subgroup_size(4))
 		{
-			cmd.set_subgroup_size_log2(true, 2, 7);
-			cmd.enable_subgroup_size_control(true);
-		}
+			cmd.set_program("assets://shaders/combiner.comp", {{"SUBGROUP", 1}});
 
-		cmd.dispatch_indirect(*raster_work.item_count_per_variant, 0);
-		cmd.enable_subgroup_size_control(false);
-	}
-	else
-	{
-		cmd.set_program("assets://shaders/combiner.comp", {{ "SUBGROUP", 0 }});
-		cmd.dispatch_indirect(*raster_work.item_count_per_variant, 0);
+			if (supports_subgroup_size_control())
+			{
+				cmd.set_subgroup_size_log2(true, 2, 7);
+				cmd.enable_subgroup_size_control(true);
+			}
+
+			cmd.dispatch_indirect(*raster_work.item_count_per_variant, 16 * variant);
+			cmd.enable_subgroup_size_control(false);
+		}
+		else
+		{
+			cmd.set_program("assets://shaders/combiner.comp", {{"SUBGROUP", 0}});
+			cmd.dispatch_indirect(*raster_work.item_count_per_variant, 16 * variant);
+		}
 	}
 	cmd.end_region();
 }
@@ -570,7 +597,10 @@ void RasterizerGPU::Impl::flush()
 {
 	end_staging();
 	if (staging.count == 0)
+	{
+		memset(state.active_state_indices, 0, sizeof(state.active_state_indices));
 		return;
+	}
 
 	auto cmd = device->request_command_buffer();
 
@@ -636,6 +666,8 @@ void RasterizerGPU::Impl::flush()
 
 	device->submit(cmd);
 	reset_staging();
+
+	memset(state.active_state_indices, 0, sizeof(state.active_state_indices));
 }
 
 void RasterizerGPU::Impl::init_binning_buffers()
@@ -702,10 +734,10 @@ void RasterizerGPU::Impl::init_raster_work_buffers()
 	             VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 
 	// Round MAX_NUM_TILE_INSTANCES up to 0x10000.
-	info.size = (MAX_NUM_TILE_INSTANCES + 1) * sizeof(TileRasterWork) * 16;
+	info.size = (MAX_NUM_TILE_INSTANCES + 1) * sizeof(TileRasterWork) * NUM_STATE_INDICES;
 	raster_work.work_list_per_variant = device->create_buffer(info);
 
-	info.size = 16 * (4 * sizeof(uint32_t));
+	info.size = NUM_STATE_INDICES * (4 * sizeof(uint32_t));
 	info.usage |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
 	raster_work.item_count_per_variant = device->create_buffer(info);
 }
@@ -847,13 +879,14 @@ RasterizerGPU::~RasterizerGPU()
 {
 }
 
-void RasterizerGPU::upload_texture(const TextureFormatLayout &layout)
+void RasterizerGPU::set_texture(unsigned state_index, const ImageView &view)
 {
-	impl->flush();
+	impl->state.image_views[state_index] = &view;
+}
 
-	auto staging = impl->device->create_image_staging_buffer(layout);
-	auto info = ImageCreateInfo::immutable_2d_image(layout.get_width(), layout.get_height(), VK_FORMAT_R8G8B8A8_UNORM, true);
-	impl->image = impl->device->create_image_from_staging_buffer(info, &staging);
+void RasterizerGPU::set_state_index(unsigned state_index)
+{
+	impl->state.current_state_index = state_index;
 }
 
 void RasterizerGPU::resize(unsigned width, unsigned height)
@@ -909,6 +942,7 @@ void RasterizerGPU::Impl::queue_primitive(const PrimitiveSetup &setup)
 
 	staging.mapped_positions[staging.count] = setup.pos;
 	staging.mapped_attributes[staging.count] = setup.attr;
+	staging.mapped_state_index[staging.count] = state.current_state_index;
 
 	staging.count++;
 	staging.num_conservative_tile_instances += num_conservative_tiles;
@@ -916,6 +950,7 @@ void RasterizerGPU::Impl::queue_primitive(const PrimitiveSetup &setup)
 
 void RasterizerGPU::rasterize_primitives(const RetroWarp::PrimitiveSetup *setup, size_t count)
 {
+	impl->state.active_state_indices[impl->state.current_state_index] = true;
 	for (size_t i = 0; i < count; i++)
 		impl->queue_primitive(setup[i]);
 }
@@ -1043,6 +1078,11 @@ bool RasterizerGPU::save_canvas(const char *path)
 void RasterizerGPU::init(Device &device)
 {
 	impl->init(device);
+}
+
+void RasterizerGPU::flush()
+{
+	impl->flush();
 }
 
 }
