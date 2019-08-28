@@ -16,6 +16,8 @@ struct BBox
 	int min_x, max_x, min_y, max_y;
 };
 
+constexpr bool ENABLE_SUBGROUP = true;
+
 struct RasterizerGPU::Impl
 {
 	Device *device;
@@ -293,7 +295,7 @@ void RasterizerGPU::Impl::binning_low_res_prepass(CommandBuffer &cmd)
 	uint32_t subgroup_size = features.subgroup_properties.subgroupSize;
 
 	const VkSubgroupFeatureFlags required = VK_SUBGROUP_FEATURE_BALLOT_BIT | VK_SUBGROUP_FEATURE_BASIC_BIT;
-	if ((features.subgroup_properties.supportedOperations & required) == required &&
+	if (ENABLE_SUBGROUP && (features.subgroup_properties.supportedOperations & required) == required &&
 	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
 	    can_support_minimum_subgroup_size(subgroup_size) && subgroup_size <= 64)
 	{
@@ -336,7 +338,7 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd)
 	uint32_t num_masks = (staging.count + 31) / 32;
 
 	const VkSubgroupFeatureFlags required = VK_SUBGROUP_FEATURE_BALLOT_BIT | VK_SUBGROUP_FEATURE_BASIC_BIT;
-	if ((features.subgroup_properties.supportedOperations & required) == required &&
+	if (ENABLE_SUBGROUP && (features.subgroup_properties.supportedOperations & required) == required &&
 	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
 	    can_support_minimum_subgroup_size(subgroup_size) && subgroup_size <= 64)
 	{
@@ -385,7 +387,7 @@ void RasterizerGPU::Impl::run_per_tile_prefix_sum(CommandBuffer &cmd)
 	                                        VK_SUBGROUP_FEATURE_BASIC_BIT |
 	                                        VK_SUBGROUP_FEATURE_BALLOT_BIT;
 
-	if ((features.subgroup_properties.supportedOperations & required) == required &&
+	if (ENABLE_SUBGROUP && (features.subgroup_properties.supportedOperations & required) == required &&
 	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
 	    can_support_minimum_subgroup_size(subgroup_size))
 	{
@@ -461,7 +463,7 @@ void RasterizerGPU::Impl::distribute_combiner_work(CommandBuffer &cmd)
 	const VkSubgroupFeatureFlags required = VK_SUBGROUP_FEATURE_BASIC_BIT |
 	                                        VK_SUBGROUP_FEATURE_BALLOT_BIT;
 
-	if ((features.subgroup_properties.supportedOperations & required) == required &&
+	if (ENABLE_SUBGROUP && (features.subgroup_properties.supportedOperations & required) == required &&
 	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0)
 	{
 		cmd.set_program("assets://shaders/distribute_combiner_work.comp", {{ "SUBGROUP", 1 }});
@@ -534,7 +536,7 @@ void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 		                                        VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
 		                                        VK_SUBGROUP_FEATURE_BALLOT_BIT;
 
-		if ((features.subgroup_properties.supportedOperations & required) == required &&
+		if (ENABLE_SUBGROUP && (features.subgroup_properties.supportedOperations & required) == required &&
 		    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
 		    can_support_minimum_subgroup_size(4))
 		{
@@ -692,6 +694,8 @@ void RasterizerGPU::Impl::flush()
 
 	auto t9 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 	device->register_time_interval(t8, t9, "rop");
+
+	device->register_time_interval(t0, t9, "iteration");
 
 	device->submit(cmd);
 	reset_staging();
@@ -987,7 +991,6 @@ void RasterizerGPU::rasterize_primitives(const RetroWarp::PrimitiveSetup *setup,
 float RasterizerGPU::get_binning_ratio(size_t count)
 {
 	impl->flush();
-	impl->device->next_frame_context();
 
 	auto cmd = impl->device->request_command_buffer();
 	cmd->barrier(VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
@@ -1074,7 +1077,6 @@ ImageHandle RasterizerGPU::copy_to_framebuffer()
 bool RasterizerGPU::save_canvas(const char *path)
 {
 	impl->flush();
-	impl->device->next_frame_context();
 
 	auto cmd = impl->device->request_command_buffer();
 	cmd->barrier(VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
@@ -1093,7 +1095,6 @@ bool RasterizerGPU::save_canvas(const char *path)
 
 	Fence fence;
 	impl->device->submit(cmd, &fence);
-	impl->device->next_frame_context();
 
 	fence->wait();
 	auto *ptr = static_cast<uint32_t *>(impl->device->map_host_buffer(*dst_buffer, MEMORY_ACCESS_READ_BIT | MEMORY_ACCESS_WRITE_BIT));

@@ -221,7 +221,7 @@ struct SWRenderApplication : Application, EventHandler
 void SWRenderApplication::on_device_created(const Vulkan::DeviceCreatedEvent& e)
 {
 	rasterizer_gpu.init(e.get_device());
-	rasterizer_gpu.resize(1280, 720);
+	rasterizer_gpu.resize(1920, 1080);
 }
 
 void SWRenderApplication::on_device_destroyed(const Vulkan::DeviceCreatedEvent &)
@@ -245,9 +245,9 @@ SWRenderApplication::SWRenderApplication(const char *path)
 	cam.set_aspect(640.0f / 360.0f);
 	cam.look_at(vec3(0.0f, 0.0f, 3.0f), vec3(0.0f));
 
-	rop.canvas.resize(1280, 720);
-	rop.depth_canvas.resize(1280, 720);
-	rasterizer.set_scissor(0, 0, 1280, 720);
+	rop.canvas.resize(1920, 1080);
+	rop.depth_canvas.resize(1920, 1080);
+	rasterizer.set_scissor(0, 0, 1920, 1080);
 	rasterizer.set_rop(&rop);
 
 	EVENT_MANAGER_REGISTER_LATCH(SWRenderApplication, on_device_created, on_device_destroyed, Vulkan::DeviceCreatedEvent);
@@ -280,7 +280,7 @@ void SWRenderApplication::render_frame(double, double)
 	rasterizer_gpu.clear_depth();
 
 	mat4 vp = cam.get_projection() * cam.get_view();
-	ViewportTransform viewport_transform = { -0.5f, -0.5f, 1280.0f, 720.0f, 0.0f, 1.0f };
+	ViewportTransform viewport_transform = { -0.5f, -0.5f, 1920.0f, 1080.0f, 0.0f, 1.0f };
 	InputPrimitive input = {};
 	PrimitiveSetup setups[256];
 	TextureSampler sampler;
@@ -374,7 +374,7 @@ namespace Granite
 {
 Application *application_create(int argc, char **argv)
 {
-	setup_fixed_divider();
+	//setup_fixed_divider();
 	if (argc != 2)
 		return nullptr;
 
