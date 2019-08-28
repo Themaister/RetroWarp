@@ -86,9 +86,9 @@ struct RasterizerGPU::Impl
 
 	struct
 	{
-		const ImageView *image_views[16] = {};
+		const ImageView *image_views[NUM_STATE_INDICES] = {};
 		unsigned current_state_index = 0;
-		bool active_state_indices[16] = {};
+		bool active_state_indices[NUM_STATE_INDICES] = {};
 	} state;
 
 	void init(Device &device);
