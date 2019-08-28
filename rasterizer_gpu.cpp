@@ -937,6 +937,11 @@ void RasterizerGPU::resize(unsigned width, unsigned height)
 
 	info.size = (width * height * sizeof(uint16_t) + 3) & ~3u;
 	impl->depth_buffer = impl->device->create_buffer(info);
+
+	impl->scissor.x = 0;
+	impl->scissor.y = 0;
+	impl->scissor.width = width;
+	impl->scissor.height = height;
 }
 
 void RasterizerGPU::clear_depth(uint16_t z)

@@ -66,7 +66,7 @@ int max2(ivec2 a)
 bool bin_primitive(ivec2 start, ivec2 end, int index)
 {
     int start_y = start.y << SUBPIXELS_LOG2;
-    int end_y = (end.y << SUBPIXELS_LOG2) - 1;
+    int end_y = (end.y - 1) << SUBPIXELS_LOG2;
     // First, we clip start/end against y_lo, y_hi.
     start_y = max(start_y, int(prim.y_lo));
     end_y = min(end_y, int(prim.y_hi) - 1);
@@ -94,7 +94,7 @@ bool bin_primitive(ivec2 start, ivec2 end, int index)
 
     // Clip start/end against raster region.
     start_x = max(start_x, start.x);
-    end_x = min(end_x, end.x);
+    end_x = min(end_x, end.x - 1);
 
     // If start_x <= end_x we will need to rasterize something.
     return start_x <= end_x;
