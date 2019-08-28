@@ -12,7 +12,7 @@ namespace RetroWarp
 class RasterizerGPU
 {
 public:
-	enum { NUM_STATE_INDICES = 64 };
+	enum { NUM_STATE_INDICES = 32 };
 	RasterizerGPU();
 	~RasterizerGPU();
 

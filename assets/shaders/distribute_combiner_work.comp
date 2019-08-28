@@ -2,6 +2,9 @@
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_8bit_storage : require
 
+#undef SUBGROUP
+#define SUBGROUP 0
+
 #if SUBGROUP
 #extension GL_KHR_shader_subgroup_ballot : require
 #endif
@@ -57,7 +60,7 @@ uint allocate_work_offset(uint variant_index)
         {
             uvec4 active_mask = subgroupBallot(true);
             uint count = subgroupBallotBitCount(active_mask);
-            uint work_offset;
+            uint work_offset = 0u;
             if (subgroupElect())
                 work_offset = atomicAdd(item_counts_per_variant[variant_index].x, count);
 

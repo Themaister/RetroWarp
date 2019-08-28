@@ -280,6 +280,8 @@ void RasterizerGPU::Impl::clear_indirect_buffer(CommandBuffer &cmd)
 {
 	cmd.begin_region("clear-indirect-buffer");
 	cmd.set_program("assets://shaders/clear_indirect_buffers.comp");
+	cmd.set_specialization_constant_mask(1);
+	cmd.set_specialization_constant(0, NUM_STATE_INDICES);
 	cmd.set_storage_buffer(0, 0, *raster_work.item_count_per_variant);
 	cmd.dispatch(1, 1, 1);
 	cmd.end_region();
