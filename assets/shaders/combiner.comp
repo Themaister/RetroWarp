@@ -14,9 +14,14 @@ layout(local_size_x = 256) in;
 #include "primitive_setup.h"
 #include "fb_info.h"
 
+struct TileRasterWork
+{
+   uint16_t x, y, instance, prim;
+};
+
 layout(std430, set = 0, binding = 0) readonly buffer WorkList
 {
-    u16vec4 tile_raster_work[];
+    TileRasterWork tile_raster_work[];
 };
 
 struct ColorTile
@@ -154,12 +159,11 @@ shared float shared_v[gl_WorkGroupSize.x];
 void main()
 {
     uint work_instance = gl_WorkGroupID.x;
-    uvec4 work_item = uvec4(tile_raster_work[work_instance]);
 
-    uint tile_x = work_item.x;
-    uint tile_y = work_item.y;
-    uint tile_instance_index = work_item.z;
-    uint primitive_index = work_item.w;
+    uint tile_x = uint(tile_raster_work[work_instance].x);
+    uint tile_y = uint(tile_raster_work[work_instance].y);
+    uint tile_instance_index = uint(tile_raster_work[work_instance].instance);
+    uint primitive_index = uint(tile_raster_work[work_instance].prim);
 
 #if SUBGROUP
     uint local_index = gl_SubgroupInvocationID + gl_SubgroupID * gl_SubgroupSize;

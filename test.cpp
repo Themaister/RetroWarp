@@ -297,6 +297,7 @@ void SWRenderApplication::render_frame(double, double)
 
 		rasterizer_gpu.upload_texture(sw->color_texture.get_layout());
 
+#if 1
 		size_t vertex_count = sw->vertices.size();
 		for (size_t i = 0; i < vertex_count; i++)
 			transform_vertex(sw->transformed_vertices[i], sw->vertices[i], mvp, n);
@@ -311,18 +312,19 @@ void SWRenderApplication::render_frame(double, double)
 			//	rasterizer.render_primitive(setups[i]);
 			rasterizer_gpu.rasterize_primitives(setups, count);
 		}
+#endif
 	}
 
 	//rop.fill_alpha_opaque();
 
 #if 0
 	InputPrimitive prim = {};
-	prim.vertices[0].x = -0.5f;
-	prim.vertices[0].y = -0.5f;
-	prim.vertices[1].x = -0.5f;
-	prim.vertices[1].y = +0.5f;
-	prim.vertices[2].x = +0.5f;
-	prim.vertices[2].y = -0.5f;
+	prim.vertices[0].x = -1.0f;
+	prim.vertices[0].y = -1.0f;
+	prim.vertices[1].x = -1.0f;
+	prim.vertices[1].y = +1.0f;
+	prim.vertices[2].x = +1.0f;
+	prim.vertices[2].y = -1.0f;
 	prim.vertices[0].w = 1.0f;
 	prim.vertices[1].w = 1.0f;
 	prim.vertices[2].w = 1.0f;
