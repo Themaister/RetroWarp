@@ -609,17 +609,26 @@ void RasterizerGPU::Impl::flush()
 	// This part can overlap with previous flush.
 	// Clear indirect buffer.
 	clear_indirect_buffer(*cmd);
+
+	auto t0 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+
 	// Binning low-res prepass.
 	binning_low_res_prepass(*cmd);
 
 	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
 
+	auto t1 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+	device->register_time_interval(t0, t1, "binning-low-res-prepass");
+
 	// Binning at full-resolution.
 	binning_full_res(*cmd);
 
 	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+
+	auto t2 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+	device->register_time_interval(t1, t2, "binning-full-res");
 
 	// Merge coarse mask.
 	// Run per-tile prefix sum.
@@ -628,11 +637,17 @@ void RasterizerGPU::Impl::flush()
 	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
 
+	auto t3 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+	device->register_time_interval(t2, t3, "per-tile-prefix-sum");
+
 	// Run horizontal prefix sum.
 	run_horiz_prefix_sum(*cmd);
 
 	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+
+	auto t4 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+	device->register_time_interval(t3, t4, "horiz-prefix-sum");
 
 	// Run vertical prefix sum.
 	// This job is very small, so run coarse mask building in parallel to avoid starving GPU completely.
@@ -641,11 +656,17 @@ void RasterizerGPU::Impl::flush()
 	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
 
+	auto t5 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+	device->register_time_interval(t4, t5, "vert-prefix-sum");
+
 	// Finalize offsets per tile.
 	finalize_tile_offsets(*cmd);
 
 	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+
+	auto t6 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+	device->register_time_interval(t5, t6, "finalize-tile-offsets");
 
 	// Distribute work.
 	distribute_combiner_work(*cmd);
@@ -654,15 +675,23 @@ void RasterizerGPU::Impl::flush()
 	             VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
 	             VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT);
 
+	auto t7 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+	device->register_time_interval(t6, t7, "distribute-combiner-work");
+
 	dispatch_combiner_work(*cmd);
 
 	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
 	             VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
 
+	auto t8 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+	device->register_time_interval(t7, t8, "dispatch-combiner-work");
 
 	// ROP.
 	run_rop(*cmd);
+
+	auto t9 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+	device->register_time_interval(t8, t9, "rop");
 
 	device->submit(cmd);
 	reset_staging();
