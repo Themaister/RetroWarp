@@ -980,6 +980,7 @@ void RasterizerGPU::Impl::queue_primitive(const PrimitiveSetup &setup)
 	if (staging.count == 0)
 		begin_staging();
 
+	state.active_state_indices[state.current_state_index] = true;
 	staging.mapped_positions[staging.count] = setup.pos;
 	staging.mapped_attributes[staging.count] = setup.attr;
 	staging.mapped_state_index[staging.count] = state.current_state_index;
@@ -990,7 +991,6 @@ void RasterizerGPU::Impl::queue_primitive(const PrimitiveSetup &setup)
 
 void RasterizerGPU::rasterize_primitives(const RetroWarp::PrimitiveSetup *setup, size_t count)
 {
-	impl->state.active_state_indices[impl->state.current_state_index] = true;
 	for (size_t i = 0; i < count; i++)
 		impl->queue_primitive(setup[i]);
 }
