@@ -3,12 +3,17 @@
 #extension GL_EXT_shader_8bit_storage : require
 #extension GL_EXT_samplerless_texture_functions : require
 
-#if SUBGROUP
+#ifdef DERIVATIVE_GROUP_LINEAR
+#extension GL_NV_compute_shader_derivatives : require
+layout(derivative_group_linearNV, local_size_x = 256) in;
+#elif SUBGROUP
 #extension GL_KHR_shader_subgroup_shuffle : require
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_ballot : require
-#endif
 layout(local_size_x = 256) in;
+#else
+layout(local_size_x = 256) in;
+#endif
 
 #include "constants.h"
 #include "primitive_setup.h"
@@ -151,7 +156,7 @@ ivec2 wrap_uv(ivec2 uv)
     return (uv << 11) >> 11;
 }
 
-#if !SUBGROUP
+#if !SUBGROUP && !defined(DERIVATIVE_GROUP_LINEAR)
 shared float shared_u[gl_WorkGroupSize.x];
 shared float shared_v[gl_WorkGroupSize.x];
 #endif
@@ -165,7 +170,9 @@ void main()
     uint tile_instance_index = uint(tile_raster_work[work_instance].instance);
     uint primitive_index = uint(tile_raster_work[work_instance].prim);
 
-#if SUBGROUP
+#ifdef DERIVATIVE_GROUP_LINEAR
+    uint local_index = gl_LocalInvocationIndex;
+#elif SUBGROUP
     uint local_index = gl_SubgroupInvocationID + gl_SubgroupID * gl_SubgroupSize;
 #else
     uint local_index = gl_LocalInvocationIndex;
@@ -213,7 +220,9 @@ void main()
     w = max(w, 0.00001);
     vec2 f_uv = vec2(u, v) / w;
 
-#if SUBGROUP
+#ifdef DERIVATIVE_GROUP_LINEAR
+    vec2 f_width2 = fwidth(f_uv);
+#elif SUBGROUP
     vec2 f_uv_horiz = subgroupShuffleXor(f_uv, 1);
     vec2 f_uv_vert = subgroupShuffleXor(f_uv, 2);
 #else
@@ -273,19 +282,22 @@ void main()
 
     ivec2 uv = ivec2(round(f_uv * 32.0));
 
-#if SUBGROUP
+#ifdef DERIVATIVE_GROUP_LINEAR
+    float f_width = max(f_width2.x, f_width2.y);
+#elif SUBGROUP
     float dudx = abs(f_uv_horiz.x - f_uv.x);
     float dudy = abs(f_uv_vert.x - f_uv.x);
     float dvdx = abs(f_uv_horiz.y - f_uv.y);
     float dvdy = abs(f_uv_vert.y - f_uv.y);
+    float f_width = max(dudx + dudy, dudx + dudy);
 #else
     float dudx = abs(shared_u[local_index ^ 1u] - f_uv.x);
     float dudy = abs(shared_u[local_index ^ 2u] - f_uv.x);
     float dvdx = abs(shared_v[local_index ^ 1u] - f_uv.y);
     float dvdy = abs(shared_v[local_index ^ 2u] - f_uv.y);
+    float f_width = max(dudx + dudy, dudx + dudy);
 #endif
 
-    float f_width = max(dudx + dudy, dudx + dudy);
     f_width = max(f_width, 1.0);
     float f_lod = log2(f_width);
 
