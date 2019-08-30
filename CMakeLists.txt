@@ -42,3 +42,8 @@ add_granite_application(test test.cpp)
 target_compile_options(test PRIVATE ${RETROWARP_CXX_FLAGS})
 target_link_libraries(test PRIVATE rasterizer-gpu stb)
 target_compile_definitions(test PRIVATE ASSET_DIRECTORY=\"${CMAKE_CURRENT_SOURCE_DIR}/assets\")
+
+add_granite_offline_tool(dump-bench dump_bench.cpp)
+target_compile_options(dump-bench PRIVATE ${RETROWARP_CXX_FLAGS})
+target_link_libraries(dump-bench PRIVATE rasterizer-gpu)
+target_compile_definitions(dump-bench PRIVATE ASSET_DIRECTORY=\"${CMAKE_CURRENT_SOURCE_DIR}/assets\")

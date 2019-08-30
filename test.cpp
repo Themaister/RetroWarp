@@ -266,10 +266,17 @@ void SWRenderApplication::begin_dump_frame()
 	}
 
 	fwrite("RETROWARP DUMP01", 1, 16, dump_file);
+
+	uint32_t word = WIDTH;
+	fwrite(&word, 1, sizeof(word), dump_file);
+	word = HEIGHT;
+	fwrite(&word, 1, sizeof(word), dump_file);
 }
 
 void SWRenderApplication::dump_textures(const std::vector<SceneFormats::MemoryMappedTexture *> &textures)
 {
+	if (!dump_file)
+		return;
 	uint32_t word = textures.size();
 	fwrite(&word, 1, sizeof(word), dump_file);
 	for (unsigned i = 0; i < textures.size(); i++)
@@ -287,6 +294,8 @@ void SWRenderApplication::dump_set_texture(unsigned index)
 
 void SWRenderApplication::dump_primitives(const PrimitiveSetup *setup, unsigned count)
 {
+	if (!dump_file)
+		return;
 	for (unsigned i = 0; i < count; i++)
 	{
 		fwrite("PRIM", 1, 4, dump_file);
