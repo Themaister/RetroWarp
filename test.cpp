@@ -232,10 +232,19 @@ struct SWRenderApplication : Application, EventHandler
 
 	void on_device_created(const Vulkan::DeviceCreatedEvent &e);
 	void on_device_destroyed(const Vulkan::DeviceCreatedEvent &);
+	bool on_key_pressed(const KeyboardEvent &e);
+	bool queue_dump_frame = false;
+
+	FILE *dump_file = nullptr;
+	void begin_dump_frame();
+	void end_dump_frame();
+	void dump_textures(const std::vector<SceneFormats::MemoryMappedTexture *> &textures);
+	void dump_set_texture(unsigned index);
+	void dump_primitives(const PrimitiveSetup *setup, unsigned count);
 };
 
-constexpr unsigned WIDTH = 1920;
-constexpr unsigned HEIGHT = 1080;
+constexpr unsigned WIDTH = 640;
+constexpr unsigned HEIGHT = 360;
 
 void SWRenderApplication::on_device_created(const Vulkan::DeviceCreatedEvent& e)
 {
@@ -245,6 +254,51 @@ void SWRenderApplication::on_device_created(const Vulkan::DeviceCreatedEvent& e)
 
 void SWRenderApplication::on_device_destroyed(const Vulkan::DeviceCreatedEvent &)
 {
+}
+
+void SWRenderApplication::begin_dump_frame()
+{
+	dump_file = fopen("/tmp/retrowarp.dump", "wb");
+	if (!dump_file)
+	{
+		LOGE("Failed to dump.\n");
+		exit(EXIT_FAILURE);
+	}
+
+	fwrite("RETROWARP DUMP01", 1, 16, dump_file);
+}
+
+void SWRenderApplication::dump_textures(const std::vector<SceneFormats::MemoryMappedTexture *> &textures)
+{
+	uint32_t word = textures.size();
+	fwrite(&word, 1, sizeof(word), dump_file);
+	for (unsigned i = 0; i < textures.size(); i++)
+		textures[i]->copy_to_path(std::string("/tmp/retrowarp.dump.tex.") + std::to_string(i));
+}
+
+void SWRenderApplication::dump_set_texture(unsigned index)
+{
+	if (!dump_file)
+		return;
+	uint32_t word = index;
+	fwrite("TEX ", 1, 4, dump_file);
+	fwrite(&word, 1, sizeof(word), dump_file);
+}
+
+void SWRenderApplication::dump_primitives(const PrimitiveSetup *setup, unsigned count)
+{
+	for (unsigned i = 0; i < count; i++)
+	{
+		fwrite("PRIM", 1, 4, dump_file);
+		fwrite(&setup[i], 1, sizeof(PrimitiveSetup), dump_file);
+	}
+}
+
+void SWRenderApplication::end_dump_frame()
+{
+	if (dump_file)
+		fclose(dump_file);
+	dump_file = nullptr;
 }
 
 SWRenderApplication::SWRenderApplication(const char *path)
@@ -270,6 +324,14 @@ SWRenderApplication::SWRenderApplication(const char *path)
 	rasterizer.set_rop(&rop);
 
 	EVENT_MANAGER_REGISTER_LATCH(SWRenderApplication, on_device_created, on_device_destroyed, Vulkan::DeviceCreatedEvent);
+	EVENT_MANAGER_REGISTER(SWRenderApplication, on_key_pressed, KeyboardEvent);
+}
+
+bool SWRenderApplication::on_key_pressed(const KeyboardEvent &e)
+{
+	if (e.get_key_state() == KeyState::Pressed && e.get_key() == Key::C)
+		queue_dump_frame = true;
+	return true;
 }
 
 static void transform_vertex(Vertex &out_vertex, const Vertex &in_vertex, const mat4 &mvp, const mat3 &normal_matrix)
@@ -311,6 +373,21 @@ void SWRenderApplication::render_frame(double, double)
 		return get_component<SoftwareRenderableComponent>(a)->state_index < get_component<SoftwareRenderableComponent>(b)->state_index;
 	});
 
+	if (queue_dump_frame)
+	{
+		begin_dump_frame();
+		unsigned max_state_index = 0;
+		for (auto &renderable : renderables)
+			max_state_index = std::max(max_state_index, get_component<SoftwareRenderableComponent>(renderable)->state_index);
+		std::vector<SceneFormats::MemoryMappedTexture *> source_paths(max_state_index + 1);
+		for (auto &renderable : renderables)
+		{
+			auto *sw = get_component<SoftwareRenderableComponent>(renderable);
+			source_paths[sw->state_index] = &sw->color_texture;
+		}
+		dump_textures(source_paths);
+	}
+
 	unsigned current_state[RasterizerGPU::NUM_STATE_INDICES];
 	for (unsigned i = 0; i < RasterizerGPU::NUM_STATE_INDICES; i++)
 		current_state[i] = ~0u;
@@ -327,6 +404,9 @@ void SWRenderApplication::render_frame(double, double)
 		{
 			rasterizer_gpu.flush();
 		}
+
+		if (queue_dump_frame)
+			dump_set_texture(sw->state_index);
 
 		current_state[sw->state_index & (RasterizerGPU::NUM_STATE_INDICES - 1)] = sw->state_index;
 
@@ -352,6 +432,8 @@ void SWRenderApplication::render_frame(double, double)
 			input.vertices[2] = sw->transformed_vertices[primitive.z];
 			unsigned count = setup_clipped_triangles(setups, input, CullMode::CCWOnly, viewport_transform);
 			rasterizer_gpu.rasterize_primitives(setups, count);
+			if (queue_dump_frame)
+				dump_primitives(setups, count);
 		}
 	}
 
@@ -363,6 +445,10 @@ void SWRenderApplication::render_frame(double, double)
 	Vulkan::CommandBufferUtil::draw_fullscreen_quad(*cmd, "builtin://shaders/quad.vert", "builtin://shaders/blit.frag");
 	cmd->end_render_pass();
 	device.submit(cmd);
+
+	if (queue_dump_frame)
+		end_dump_frame();
+	queue_dump_frame = false;
 }
 
 namespace Granite
