@@ -102,7 +102,10 @@ struct SoftwareRenderableComponent : ComponentBase
 	std::vector<Vertex> transformed_vertices;
 	std::vector<uvec3> indices;
 	SceneFormats::MemoryMappedTexture color_texture;
+	unsigned state_index;
 };
+
+static std::unordered_map<std::string, unsigned> state_index_map;
 
 static void create_software_renderable(Entity *entity, RenderableComponent *renderable)
 {
@@ -159,6 +162,19 @@ static void create_software_renderable(Entity *entity, RenderableComponent *rend
 
 	auto &mat = imported_mesh->get_material_info();
 	sw->color_texture = load_texture_from_file(mat.base_color.path);
+
+	auto itr = state_index_map.find(mat.base_color.path);
+	if (itr == end(state_index_map))
+	{
+		unsigned index = state_index_map.size();
+		state_index_map[mat.base_color.path] = index;
+		sw->state_index = index;
+	}
+	else
+	{
+		unsigned index = itr->second;
+		sw->state_index = index;
+	}
 
 	if (mesh.attribute_layout[Util::ecast(MeshAttribute::UV)].format == VK_FORMAT_R32G32_SFLOAT)
 	{
@@ -289,15 +305,31 @@ void SWRenderApplication::render_frame(double, double)
 	TextureSampler sampler;
 	rasterizer.set_sampler(&sampler);
 
-	unsigned current_binding = 0;
-
 	auto &renderables = scene.get_entity_pool().get_component_group<RenderableComponent, SoftwareRenderableComponent, RenderInfoComponent>();
+
+	sort(begin(renderables), end(renderables), [&](const auto &a, const auto &b) {
+		return get_component<SoftwareRenderableComponent>(a)->state_index < get_component<SoftwareRenderableComponent>(b)->state_index;
+	});
+
+	unsigned current_state[RasterizerGPU::NUM_STATE_INDICES];
+	for (unsigned i = 0; i < RasterizerGPU::NUM_STATE_INDICES; i++)
+		current_state[i] = ~0u;
+
 	for (auto &renderable : renderables)
 	{
 		auto &m = get_component<RenderInfoComponent>(renderable)->transform->world_transform;
 		mat4 mvp = vp * m;
 		mat3 n = mat3(m);
 		auto *sw = get_component<SoftwareRenderableComponent>(renderable);
+
+		if (current_state[sw->state_index] != ~0u &&
+		    current_state[sw->state_index & (RasterizerGPU::NUM_STATE_INDICES - 1)] != sw->state_index)
+		{
+			rasterizer_gpu.flush();
+		}
+
+		current_state[sw->state_index & (RasterizerGPU::NUM_STATE_INDICES - 1)] = sw->state_index;
+
 		sampler.layout = &sw->color_texture.get_layout();
 
 		auto *render = get_component<RenderableComponent>(renderable);
@@ -306,10 +338,9 @@ void SWRenderApplication::render_frame(double, double)
 			continue;
 
 		auto *gpu_texture = static_mesh->material->textures[Util::ecast(Material::Textures::BaseColor)];
-		rasterizer_gpu.set_state_index(current_binding);
-		rasterizer_gpu.set_texture(current_binding, gpu_texture->get_image()->get_view());
+		rasterizer_gpu.set_state_index(sw->state_index & (RasterizerGPU::NUM_STATE_INDICES - 1));
+		rasterizer_gpu.set_texture(sw->state_index & (RasterizerGPU::NUM_STATE_INDICES - 1), gpu_texture->get_image()->get_view());
 
-#if 1
 		size_t vertex_count = sw->vertices.size();
 		for (size_t i = 0; i < vertex_count; i++)
 			transform_vertex(sw->transformed_vertices[i], sw->vertices[i], mvp, n);
@@ -320,48 +351,9 @@ void SWRenderApplication::render_frame(double, double)
 			input.vertices[1] = sw->transformed_vertices[primitive.y];
 			input.vertices[2] = sw->transformed_vertices[primitive.z];
 			unsigned count = setup_clipped_triangles(setups, input, CullMode::CCWOnly, viewport_transform);
-			//for (unsigned i = 0; i < count; i++)
-			//	rasterizer.render_primitive(setups[i]);
 			rasterizer_gpu.rasterize_primitives(setups, count);
 		}
-#endif
-
-		current_binding++;
-		if (current_binding == RasterizerGPU::NUM_STATE_INDICES)
-		{
-			rasterizer_gpu.flush();
-			current_binding = 0;
-		}
 	}
-
-	//rop.fill_alpha_opaque();
-
-#if 0
-	InputPrimitive prim = {};
-	prim.vertices[0].x = -1.0f;
-	prim.vertices[0].y = -1.0f;
-	prim.vertices[1].x = -1.0f;
-	prim.vertices[1].y = +1.0f;
-	prim.vertices[2].x = +1.0f;
-	prim.vertices[2].y = -1.0f;
-	prim.vertices[0].w = 1.0f;
-	prim.vertices[1].w = 1.0f;
-	prim.vertices[2].w = 1.0f;
-	prim.vertices[2].u = 400.0f;
-	prim.vertices[1].v = 400.0f;
-	prim.vertices[0].color[0] = 1.0f;
-	prim.vertices[1].color[2] = 1.0f;
-	prim.vertices[2].color[2] = 1.0f;
-	unsigned count = setup_clipped_triangles(setups, prim, CullMode::CCWOnly, viewport_transform);
-	rasterizer_gpu.rasterize_primitives(setups, count);
-#endif
-
-#if 0
-	auto info = Vulkan::ImageCreateInfo::immutable_2d_image(rop.canvas.get_width(), rop.canvas.get_height(), VK_FORMAT_R8G8B8A8_SRGB);
-	Vulkan::ImageInitialData initial = {};
-	initial.data = rop.canvas.get_data();
-	auto image = device.create_image(info, &initial);
-#endif
 
 	auto image_gpu = rasterizer_gpu.copy_to_framebuffer();
 
