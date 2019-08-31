@@ -959,7 +959,11 @@ void RasterizerGPU::clear_depth(uint16_t z)
 	             VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_TRANSFER_BIT,
 	             VK_ACCESS_TRANSFER_WRITE_BIT);
+
+	auto t0 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 	cmd->fill_buffer(*impl->depth_buffer, (uint32_t(z) << 16) | z);
+	auto t1 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+	impl->device->register_time_interval(t0, t1, "clear-depth");
 	impl->device->submit(cmd);
 }
 
@@ -971,7 +975,10 @@ void RasterizerGPU::clear_color(uint32_t rgba)
 	             VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_TRANSFER_BIT,
 	             VK_ACCESS_TRANSFER_WRITE_BIT);
+	auto t0 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 	cmd->fill_buffer(*impl->color_buffer, rgba);
+	auto t1 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+	impl->device->register_time_interval(t0, t1, "clear-color");
 	impl->device->submit(cmd);
 }
 

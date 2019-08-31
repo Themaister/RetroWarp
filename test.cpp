@@ -243,8 +243,8 @@ struct SWRenderApplication : Application, EventHandler
 	void dump_primitives(const PrimitiveSetup *setup, unsigned count);
 };
 
-constexpr unsigned WIDTH = 640;
-constexpr unsigned HEIGHT = 360;
+constexpr unsigned WIDTH = 1280;
+constexpr unsigned HEIGHT = 720;
 
 void SWRenderApplication::on_device_created(const Vulkan::DeviceCreatedEvent& e)
 {
@@ -408,8 +408,9 @@ void SWRenderApplication::render_frame(double, double)
 		mat3 n = mat3(m);
 		auto *sw = get_component<SoftwareRenderableComponent>(renderable);
 
-		if (current_state[sw->state_index] != ~0u &&
-		    current_state[sw->state_index & (RasterizerGPU::NUM_STATE_INDICES - 1)] != sw->state_index)
+		unsigned masked_state_index = sw->state_index & (RasterizerGPU::NUM_STATE_INDICES - 1);
+		if (current_state[masked_state_index] != ~0u &&
+		    current_state[masked_state_index] != sw->state_index)
 		{
 			rasterizer_gpu.flush();
 		}
@@ -417,7 +418,7 @@ void SWRenderApplication::render_frame(double, double)
 		if (queue_dump_frame)
 			dump_set_texture(sw->state_index);
 
-		current_state[sw->state_index & (RasterizerGPU::NUM_STATE_INDICES - 1)] = sw->state_index;
+		current_state[masked_state_index] = sw->state_index;
 
 		sampler.layout = &sw->color_texture.get_layout();
 
@@ -427,8 +428,8 @@ void SWRenderApplication::render_frame(double, double)
 			continue;
 
 		auto *gpu_texture = static_mesh->material->textures[Util::ecast(Material::Textures::BaseColor)];
-		rasterizer_gpu.set_state_index(sw->state_index & (RasterizerGPU::NUM_STATE_INDICES - 1));
-		rasterizer_gpu.set_texture(sw->state_index & (RasterizerGPU::NUM_STATE_INDICES - 1), gpu_texture->get_image()->get_view());
+		rasterizer_gpu.set_state_index(masked_state_index);
+		rasterizer_gpu.set_texture(masked_state_index, gpu_texture->get_image()->get_view());
 
 		size_t vertex_count = sw->vertices.size();
 		for (size_t i = 0; i < vertex_count; i++)
