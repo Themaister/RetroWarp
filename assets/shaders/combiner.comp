@@ -222,6 +222,7 @@ void main()
 
 #ifdef DERIVATIVE_GROUP_LINEAR
     vec2 f_width2 = fwidth(f_uv);
+    float f_width = max(f_width2.x, f_width2.y);
 #elif SUBGROUP
     vec2 f_uv_horiz = subgroupShuffleXor(f_uv, 1);
     vec2 f_uv_vert = subgroupShuffleXor(f_uv, 2);
@@ -282,15 +283,13 @@ void main()
 
     ivec2 uv = ivec2(round(f_uv * 32.0));
 
-#ifdef DERIVATIVE_GROUP_LINEAR
-    float f_width = max(f_width2.x, f_width2.y);
-#elif SUBGROUP
+#if SUBGROUP
     float dudx = abs(f_uv_horiz.x - f_uv.x);
     float dudy = abs(f_uv_vert.x - f_uv.x);
     float dvdx = abs(f_uv_horiz.y - f_uv.y);
     float dvdy = abs(f_uv_vert.y - f_uv.y);
     float f_width = max(dudx + dudy, dudx + dudy);
-#else
+#elif !defined(DERIVATIVE_GROUP_LINEAR)
     float dudx = abs(shared_u[local_index ^ 1u] - f_uv.x);
     float dudy = abs(shared_u[local_index ^ 2u] - f_uv.x);
     float dvdx = abs(shared_v[local_index ^ 1u] - f_uv.y);
