@@ -66,11 +66,15 @@ struct RasterizerGPU::Impl
 		BufferHandle positions;
 		BufferHandle attributes;
 		BufferHandle state_index;
+		BufferHandle positions_gpu;
+		BufferHandle attributes_gpu;
+		BufferHandle state_index_gpu;
 		PrimitiveSetupPos *mapped_positions = nullptr;
 		PrimitiveSetupAttr *mapped_attributes = nullptr;
 		uint8_t *mapped_state_index = nullptr;
 		unsigned count = 0;
 		unsigned num_conservative_tile_instances = 0;
+		bool host_visible = false;
 	} staging;
 
 	struct
@@ -238,25 +242,56 @@ unsigned RasterizerGPU::Impl::compute_num_conservative_tiles(const PrimitiveSetu
 void RasterizerGPU::Impl::begin_staging()
 {
 	BufferCreateInfo info;
-	info.domain = BufferDomain::Host;
-	info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+	info.domain = BufferDomain::Device;
+	info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
 	info.size = MAX_PRIMITIVES * sizeof(PrimitiveSetupPos);
-	staging.positions = device->create_buffer(info);
+	staging.positions_gpu = device->create_buffer(info);
 	info.size = MAX_PRIMITIVES * sizeof(PrimitiveSetupAttr);
-	staging.attributes = device->create_buffer(info);
+	staging.attributes_gpu = device->create_buffer(info);
 	info.size = MAX_PRIMITIVES * sizeof(uint8_t);
-	staging.state_index = device->create_buffer(info);
+	staging.state_index_gpu = device->create_buffer(info);
 
 	staging.mapped_positions = static_cast<PrimitiveSetupPos *>(
-			device->map_host_buffer(*staging.positions,
+			device->map_host_buffer(*staging.positions_gpu,
 			                       MEMORY_ACCESS_WRITE_BIT));
 	staging.mapped_attributes = static_cast<PrimitiveSetupAttr *>(
-			device->map_host_buffer(*staging.attributes,
+			device->map_host_buffer(*staging.attributes_gpu,
 			                       MEMORY_ACCESS_WRITE_BIT));
 	staging.mapped_state_index = static_cast<uint8_t *>(
-			device->map_host_buffer(*staging.state_index,
+			device->map_host_buffer(*staging.state_index_gpu,
 			                        MEMORY_ACCESS_WRITE_BIT));
+
+	if (staging.mapped_positions && staging.mapped_attributes && staging.mapped_state_index)
+	{
+		staging.positions = staging.positions_gpu;
+		staging.attributes = staging.attributes_gpu;
+		staging.state_index = staging.state_index_gpu;
+		staging.host_visible = true;
+	}
+	else
+	{
+		info.domain = BufferDomain::Host;
+		info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+
+		info.size = MAX_PRIMITIVES * sizeof(PrimitiveSetupPos);
+		staging.positions = device->create_buffer(info);
+		info.size = MAX_PRIMITIVES * sizeof(PrimitiveSetupAttr);
+		staging.attributes = device->create_buffer(info);
+		info.size = MAX_PRIMITIVES * sizeof(uint8_t);
+		staging.state_index = device->create_buffer(info);
+
+		staging.mapped_positions = static_cast<PrimitiveSetupPos *>(
+				device->map_host_buffer(*staging.positions,
+				                        MEMORY_ACCESS_WRITE_BIT));
+		staging.mapped_attributes = static_cast<PrimitiveSetupAttr *>(
+				device->map_host_buffer(*staging.attributes,
+				                        MEMORY_ACCESS_WRITE_BIT));
+		staging.mapped_state_index = static_cast<uint8_t *>(
+				device->map_host_buffer(*staging.state_index,
+				                        MEMORY_ACCESS_WRITE_BIT));
+		staging.host_visible = false;
+	}
 
 	staging.count = 0;
 	staging.num_conservative_tile_instances = 0;
@@ -274,6 +309,17 @@ void RasterizerGPU::Impl::end_staging()
 	staging.mapped_positions = nullptr;
 	staging.mapped_attributes = nullptr;
 	staging.mapped_state_index = nullptr;
+
+	if (!staging.host_visible && staging.count != 0)
+	{
+		auto cmd = device->request_command_buffer(CommandBuffer::Type::AsyncTransfer);
+		cmd->copy_buffer(*staging.positions_gpu, 0, *staging.positions, 0, staging.count * sizeof(PrimitiveSetupPos));
+		cmd->copy_buffer(*staging.attributes_gpu, 0, *staging.attributes, 0, staging.count * sizeof(PrimitiveSetupAttr));
+		cmd->copy_buffer(*staging.state_index_gpu, 0, *staging.state_index, 0, staging.count * sizeof(uint8_t));
+		Semaphore sem;
+		device->submit(cmd, nullptr, 1, &sem);
+		device->add_wait_semaphore(CommandBuffer::Type::Generic, sem, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, true);
+	}
 }
 
 void RasterizerGPU::Impl::clear_indirect_buffer(CommandBuffer &cmd)
@@ -291,7 +337,7 @@ void RasterizerGPU::Impl::binning_low_res_prepass(CommandBuffer &cmd)
 {
 	cmd.begin_region("binning-low-res-prepass");
 	cmd.set_storage_buffer(0, 0, *binning.mask_buffer_low_res);
-	cmd.set_storage_buffer(0, 1, *staging.positions);
+	cmd.set_storage_buffer(0, 1, *staging.positions_gpu);
 
 	auto &features = device->get_device_features();
 	uint32_t subgroup_size = features.subgroup_properties.subgroupSize;
@@ -330,7 +376,7 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd)
 {
 	cmd.begin_region("binning-full-res");
 	cmd.set_storage_buffer(0, 0, *binning.mask_buffer);
-	cmd.set_storage_buffer(0, 1, *staging.positions);
+	cmd.set_storage_buffer(0, 1, *staging.positions_gpu);
 	cmd.set_storage_buffer(0, 2, *binning.mask_buffer_low_res);
 	cmd.set_storage_buffer(0, 3, *binning.mask_buffer_coarse);
 
@@ -456,7 +502,7 @@ void RasterizerGPU::Impl::distribute_combiner_work(CommandBuffer &cmd)
 	cmd.set_storage_buffer(0, 2, *binning.mask_buffer);
 	cmd.set_storage_buffer(0, 3, *raster_work.item_count_per_variant);
 	cmd.set_storage_buffer(0, 4, *raster_work.work_list_per_variant);
-	cmd.set_storage_buffer(0, 5, *staging.state_index);
+	cmd.set_storage_buffer(0, 5, *staging.state_index_gpu);
 
 	unsigned num_tiles_x = (width + TILE_WIDTH - 1) / TILE_WIDTH;
 	unsigned num_tiles_y = (height + TILE_HEIGHT - 1) / TILE_HEIGHT;
@@ -518,8 +564,8 @@ void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 	cmd.set_storage_buffer(0, 1, *tile_instance_data.color);
 	cmd.set_storage_buffer(0, 2, *tile_instance_data.depth);
 	cmd.set_storage_buffer(0, 3, *tile_instance_data.flags);
-	cmd.set_storage_buffer(0, 4, *staging.positions);
-	cmd.set_storage_buffer(0, 5, *staging.attributes);
+	cmd.set_storage_buffer(0, 4, *staging.positions_gpu);
+	cmd.set_storage_buffer(0, 5, *staging.attributes_gpu);
 
 	for (unsigned variant = 0; variant < NUM_STATE_INDICES; variant++)
 	{
