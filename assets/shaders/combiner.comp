@@ -15,9 +15,9 @@ layout(local_size_x = 256) in;
 layout(local_size_x = 256) in;
 #endif
 
-#include "constants.h"
-#include "primitive_setup.h"
-#include "fb_info.h"
+#define PRIMITIVE_SETUP_POS_BUFFER 4
+#define PRIMITIVE_SETUP_ATTR_BUFFER 5
+#include "rasterizer_helpers.h"
 
 struct TileRasterWork
 {
@@ -59,16 +59,6 @@ layout(std430, set = 0, binding = 3) writeonly buffer Flags
     FlagTile flag_tiles[];
 };
 
-layout(std430, set = 0, binding = 4) readonly buffer TriangleSetupPos
-{
-    PrimitiveSetupPos primitives_pos[];
-};
-
-layout(std430, set = 0, binding = 5) readonly buffer TriangleSetupAttr
-{
-    PrimitiveSetupAttr primitives_attr[];
-};
-
 layout(set = 1, binding = 0) uniform sampler2D uTexture;
 
 int quant_w(int w)
@@ -76,6 +66,7 @@ int quant_w(int w)
     return max((w + 8) >> 4, 1);
 }
 
+#if 0
 const int INVERSE_BITS = 4;
 const int FIXED_LUT[(1 << INVERSE_BITS) + 1] = int[](
     -8388608,
@@ -137,14 +128,6 @@ uvec4 filter_linear_vert(uvec4 top, uvec4 bottom, uint weight)
     return (top * t + bottom * b + 512u) >> 10u;
 }
 
-uvec4 multiply_unorm8(uvec4 a, uvec4 b)
-{
-    uvec4 v = a * b;
-    v += (v >> 8u);
-    v = (v + 0x80u) >> 8u;
-    return v;
-}
-
 uint clamp_unorm16(int z)
 {
     z = (z + 0x80) >> 8;
@@ -154,6 +137,15 @@ uint clamp_unorm16(int z)
 ivec2 wrap_uv(ivec2 uv)
 {
     return (uv << 11) >> 11;
+}
+#endif
+
+uvec4 multiply_unorm8(uvec4 a, uvec4 b)
+{
+    uvec4 v = a * b;
+    v += (v >> 8u);
+    v = (v + 0x80u) >> 8u;
+    return v;
 }
 
 #if !SUBGROUP && !defined(DERIVATIVE_GROUP_LINEAR)
@@ -189,36 +181,9 @@ void main()
     int x = int(tile_x * uint(TILE_WIDTH) + local_x);
     int y = int(tile_y * uint(TILE_HEIGHT) + local_y);
 
-    int y_sub = y << SUBPIXELS_LOG2;
-
-#define prim_pos primitives_pos[primitive_index]
-#define prim_attr primitives_attr[primitive_index]
-
-    int interpolation_base_x = prim_pos.x_a >> 16;
-    int interpolation_base_y = int(prim_pos.y_lo);
-
-    int span_begin_y = (int(prim_pos.y_lo) + ((1 << SUBPIXELS_LOG2) - 1)) >> SUBPIXELS_LOG2;
-    int span_end_y = (int(prim_pos.y_hi) - 1) >> SUBPIXELS_LOG2;
-
-    if (span_begin_y < fb_info.scissor.y)
-        span_begin_y = fb_info.scissor.y;
-    if (span_end_y >= fb_info.scissor.y + fb_info.scissor.w)
-        span_end_y = fb_info.scissor.y + fb_info.scissor.w - 1;
-
-    // Need to compute UV for derivatives.
-    float dx = float((x << SUBPIXELS_LOG2) - interpolation_base_x);
-    float dy = float(y_sub - interpolation_base_y);
-
-    float j = prim_attr.djdx * dx + prim_attr.djdy * dy;
-    float k = prim_attr.dkdx * dx + prim_attr.dkdy * dy;
-    float i = 1.0 - j - k;
-    vec3 bary = vec3(i, j, k);
-
-    float u = dot(prim_attr.u, bary);
-    float v = dot(prim_attr.v, bary);
-    float w = dot(prim_attr.w, bary);
-    w = max(w, 0.00001);
-    vec2 f_uv = vec2(u, v) / w;
+    ivec2 interpolation_base = get_interpolation_base(primitive_index);
+    vec3 bary = interpolate_barycentrics(primitive_index, x, y, interpolation_base);
+    vec2 f_uv = interpolate_uv(primitive_index, bary);
 
 #ifdef DERIVATIVE_GROUP_LINEAR
     vec2 f_width2 = fwidth(f_uv);
@@ -232,56 +197,17 @@ void main()
     barrier();
 #endif
 
-    if (y < span_begin_y || y > span_end_y)
-    {
-        flag_tiles[tile_instance_index].flag[local_pixel] = uint16_t(0);
-        return;
-    }
-
-    int x_a = prim_pos.x_a + prim_pos.dxdy_a * (y_sub - int(prim_pos.y_lo));
-    int x_b = prim_pos.x_b + prim_pos.dxdy_b * (y_sub - int(prim_pos.y_lo));
-    int x_c = prim_pos.x_c + prim_pos.dxdy_c * (y_sub - int(prim_pos.y_mid));
-
-    // The secondary span edge is split into two edges.
-    bool select_hi = y_sub >= int(prim_pos.y_mid);
-    int primary_x = x_a;
-    int secondary_x = select_hi ? x_c : x_b;
-
-    int start_x, end_x;
-
-    if ((int(prim_pos.flags) & PRIMITIVE_RIGHT_MAJOR_BIT) != 0)
-    {
-        start_x = (secondary_x + RASTER_ROUNDING) >> (16 + SUBPIXELS_LOG2);
-        end_x = (primary_x - 1) >> (16 + SUBPIXELS_LOG2);
-    }
-    else
-    {
-        start_x = (primary_x + RASTER_ROUNDING) >> (16 + SUBPIXELS_LOG2);
-        end_x = (secondary_x - 1) >> (16 + SUBPIXELS_LOG2);
-    }
-
-    if (start_x < fb_info.scissor.x)
-        start_x = fb_info.scissor.x;
-    if (end_x >= fb_info.scissor.x + fb_info.scissor.z)
-        end_x = fb_info.scissor.x + fb_info.scissor.z - 1;
-
-    if (x < start_x || x > end_x)
+    bool has_coverage = test_coverage_single(primitive_index, x, y);
+    if (!has_coverage)
     {
         flag_tiles[tile_instance_index].flag[local_pixel] = uint16_t(0);
         return;
     }
 
     // We've passed the rasterization test. Interpolate colors, Z, 1/W.
-    uint z = uint(clamp(round(float(0xffff) * (prim_attr.z + prim_attr.dzdx * dx + prim_attr.dzdy * dy)), 0.0, float(0xffff)));
-
-    vec4 rgba =
-        vec4(uvec4(prim_attr.color_a)) * i +
-        vec4(uvec4(prim_attr.color_b)) * j +
-        vec4(uvec4(prim_attr.color_c)) * k;
-
-    uvec4 urgba = uvec4(clamp(round(rgba), vec4(0.0), vec4(255.0)));
-
-    ivec2 uv = ivec2(round(f_uv * 32.0));
+    uint z = interpolate_z(primitive_index, x, y, interpolation_base);
+    uvec4 urgba = interpolate_rgba(primitive_index, bary);
+    //ivec2 uv = ivec2(round(f_uv * 32.0));
 
 #if SUBGROUP
     float dudx = abs(f_uv_horiz.x - f_uv.x);
@@ -299,13 +225,7 @@ void main()
 
     f_width = max(f_width, 1.0);
     float f_lod = log2(f_width);
-
-    //uv -= 16;
-    //ivec2 sub_uv = uv & 31;
-    //uv >>= 5;
-    uv += 32 * ivec2(prim_attr.uv_offset);
-
-    f_uv = vec2(uv) / (32.0 * textureSize(uTexture, 0).xy);
+    f_uv /= textureSize(uTexture, 0).xy;
 
     // HACK, use UNORM later.
     uvec4 tex = uvec4(255.0 * textureLod(uTexture, f_uv, f_lod));
