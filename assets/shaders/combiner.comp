@@ -41,7 +41,7 @@ struct DepthTile
 
 struct FlagTile
 {
-    uint16_t flag[TILE_HEIGHT * TILE_WIDTH];
+    uint8_t flag[TILE_HEIGHT * TILE_WIDTH];
 };
 
 layout(std430, set = 0, binding = 1) writeonly buffer Color
@@ -61,12 +61,12 @@ layout(std430, set = 0, binding = 3) writeonly buffer Flags
 
 layout(set = 1, binding = 0) uniform sampler2D uTexture;
 
+#if 0
 int quant_w(int w)
 {
     return max((w + 8) >> 4, 1);
 }
 
-#if 0
 const int INVERSE_BITS = 4;
 const int FIXED_LUT[(1 << INVERSE_BITS) + 1] = int[](
     -8388608,
@@ -138,7 +138,6 @@ ivec2 wrap_uv(ivec2 uv)
 {
     return (uv << 11) >> 11;
 }
-#endif
 
 uvec4 multiply_unorm8(uvec4 a, uvec4 b)
 {
@@ -147,6 +146,7 @@ uvec4 multiply_unorm8(uvec4 a, uvec4 b)
     v = (v + 0x80u) >> 8u;
     return v;
 }
+#endif
 
 #if !SUBGROUP && !defined(DERIVATIVE_GROUP_LINEAR)
 shared float shared_u[gl_WorkGroupSize.x];
@@ -200,14 +200,12 @@ void main()
     bool has_coverage = test_coverage_single(primitive_index, x, y);
     if (!has_coverage)
     {
-        flag_tiles[tile_instance_index].flag[local_pixel] = uint16_t(0);
+        flag_tiles[tile_instance_index].flag[local_pixel] = uint8_t(0);
         return;
     }
 
     // We've passed the rasterization test. Interpolate colors, Z, 1/W.
-    uint z = interpolate_z(primitive_index, x, y, interpolation_base);
-    uvec4 urgba = interpolate_rgba(primitive_index, bary);
-    //ivec2 uv = ivec2(round(f_uv * 32.0));
+    vec4 rgba = interpolate_rgba(primitive_index, bary);
 
 #if SUBGROUP
     float dudx = abs(f_uv_horiz.x - f_uv.x);
@@ -227,27 +225,18 @@ void main()
     float f_lod = log2(f_width);
     f_uv /= textureSize(uTexture, 0).xy;
 
-    // HACK, use UNORM later.
-    uvec4 tex = uvec4(255.0 * textureLod(uTexture, f_uv, f_lod));
-    if (tex.w < 128u)
+    vec4 tex = textureLod(uTexture, f_uv, f_lod);
+    if (tex.w < 0.5)
     {
-        flag_tiles[tile_instance_index].flag[local_pixel] = uint16_t(0);
+        flag_tiles[tile_instance_index].flag[local_pixel] = uint8_t(0);
         return;
     }
-    //tex = uvec4(30.0 * f_lod);
-#if 0
-    uvec4 tex_10 = texelFetchOffset(uTexture, uv, 0, ivec2(1, 0));
-    uvec4 tex_01 = texelFetchOffset(uTexture, uv, 0, ivec2(0, 1));
-    uvec4 tex_11 = texelFetchOffset(uTexture, uv, 0, ivec2(1, 1));
 
-    uvec4 tex_0 = filter_linear_horiz(tex_00, tex_10, sub_uv.x);
-    uvec4 tex_1 = filter_linear_horiz(tex_01, tex_11, sub_uv.x);
-    uvec4 tex = filter_linear_vert(tex_0, tex_1, sub_uv.y);
-#endif
+    rgba *= tex;
+    uint z = interpolate_z(primitive_index, x, y, interpolation_base);
 
-    tex = multiply_unorm8(tex, urgba);
-
-    color_tiles[tile_instance_index].color[local_pixel] = u8vec4(tex);
+    uvec4 urgba = uvec4(round(rgba));
+    color_tiles[tile_instance_index].color[local_pixel] = u8vec4(urgba);
     depth_tiles[tile_instance_index].depth[local_pixel] = uint16_t(z);
-    flag_tiles[tile_instance_index].flag[local_pixel] = uint16_t(1);
+    flag_tiles[tile_instance_index].flag[local_pixel] = uint8_t(1);
 }

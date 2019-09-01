@@ -39,7 +39,7 @@ struct DepthTile
 
 struct FlagTile
 {
-    uint16_t flag[TILE_HEIGHT * TILE_WIDTH];
+    uint8_t flag[TILE_HEIGHT * TILE_WIDTH];
 };
 
 layout(std430, set = 0, binding = 4) readonly buffer Color

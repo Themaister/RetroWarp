@@ -158,13 +158,6 @@ constexpr int MAX_TILES_Y_LOW_RES = MAX_HEIGHT / (4 * TILE_HEIGHT);
 constexpr int MAX_NUM_TILE_INSTANCES = 0xffff;
 const int RASTER_ROUNDING = (1 << (SUBPIXELS_LOG2 + 16)) - 1;
 
-struct PerTileData
-{
-	uint32_t color;
-	uint16_t depth;
-	uint16_t flags;
-};
-
 struct TileRasterWork
 {
 	uint16_t tile_x, tile_y;
@@ -809,7 +802,7 @@ void RasterizerGPU::Impl::init_tile_buffers()
 	tile_instance_data.color = device->create_buffer(info);
 	info.size = MAX_NUM_TILE_INSTANCES * TILE_WIDTH * TILE_HEIGHT * sizeof(uint16_t);
 	tile_instance_data.depth = device->create_buffer(info);
-	info.size = MAX_NUM_TILE_INSTANCES * TILE_WIDTH * TILE_HEIGHT * sizeof(uint16_t);
+	info.size = MAX_NUM_TILE_INSTANCES * TILE_WIDTH * TILE_HEIGHT * sizeof(uint8_t);
 	tile_instance_data.flags = device->create_buffer(info);
 }
 

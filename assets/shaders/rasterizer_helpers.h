@@ -51,15 +51,14 @@ vec2 interpolate_uv(uint primitive_index, vec3 bary)
 #endif
 
 #ifdef PRIMITIVE_SETUP_ATTR_BUFFER
-uvec4 interpolate_rgba(uint primitive_index, vec3 bary)
+vec4 interpolate_rgba(uint primitive_index, vec3 bary)
 {
 	vec4 rgba =
 			vec4(uvec4(primitives_attr[primitive_index].color_a)) * bary.x +
 			vec4(uvec4(primitives_attr[primitive_index].color_b)) * bary.y +
 			vec4(uvec4(primitives_attr[primitive_index].color_c)) * bary.z;
 
-	uvec4 urgba = uvec4(clamp(round(rgba), vec4(0.0), vec4(255.0)));
-	return urgba;
+	return clamp(rgba, vec4(0.0), vec4(255.0));
 }
 #endif
 
