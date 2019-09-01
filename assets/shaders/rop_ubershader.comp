@@ -124,9 +124,7 @@ void main()
 
 #if defined(DERIVATIVE_GROUP_LINEAR) || defined(DERIVATIVE_GROUP_QUAD)
                 vec2 f_width_2 = fwidth(f_uv);
-                float f_lod = log2(max(1.0, max(f_width_2.x, f_width_2.y)));
-                f_uv /= vec2(textureSize(uTextures[tex_index], 0));
-                vec4 tex = textureLod(uTextures[tex_index], f_uv, f_lod);
+                float f_width = max(f_width_2.x, f_width_2.y);
 #elif SUBGROUP
                 vec2 f_uv_horiz = subgroupShuffleXor(f_uv, 1);
                 vec2 f_uv_vert = subgroupShuffleXor(f_uv, 2);
@@ -140,9 +138,6 @@ void main()
                 bool has_coverage = test_coverage_single(primitive_index, x, y);
                 if (!has_coverage)
                     continue;
-
-                // We've passed the rasterization test. Interpolate colors, Z, 1/W.
-                vec4 rgba = interpolate_rgba(primitive_index, bary);
 
 #if SUBGROUP
                 float dudx = abs(f_uv_horiz.x - f_uv.x);
@@ -158,15 +153,16 @@ void main()
                 float f_width = max(dudx + dudy, dudx + dudy);
 #endif
 
-#if !defined(DERIVATIVE_GROUP_LINEAR) && !defined(DERIVATIVE_GROUP_QUAD)
                 f_width = max(f_width, 1.0);
                 float f_lod = log2(f_width);
                 f_uv /= vec2(textureSize(uTextures[tex_index], 0));
                 vec4 tex = textureLod(uTextures[tex_index], f_uv, f_lod);
-#endif
 
                 if (tex.w < 0.5)
                     continue;
+
+                // We've passed the rasterization test. Interpolate colors, Z, 1/W.
+                vec4 rgba = interpolate_rgba(primitive_index, bary);
 
                 rgba *= tex;
                 rgba = clamp(rgba, 0.0, 255.0);
