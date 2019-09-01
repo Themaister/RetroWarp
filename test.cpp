@@ -258,7 +258,7 @@ void SWRenderApplication::on_device_destroyed(const Vulkan::DeviceCreatedEvent &
 
 void SWRenderApplication::begin_dump_frame()
 {
-	dump_file = fopen("/tmp/retrowarp.dump", "wb");
+	dump_file = fopen("retrowarp.dump", "wb");
 	if (!dump_file)
 	{
 		LOGE("Failed to dump.\n");
@@ -280,7 +280,7 @@ void SWRenderApplication::dump_textures(const std::vector<SceneFormats::MemoryMa
 	uint32_t word = textures.size();
 	fwrite(&word, 1, sizeof(word), dump_file);
 	for (unsigned i = 0; i < textures.size(); i++)
-		textures[i]->copy_to_path(std::string("/tmp/retrowarp.dump.tex.") + std::to_string(i));
+		textures[i]->copy_to_path(std::string("retrowarp.dump.tex.") + std::to_string(i));
 }
 
 void SWRenderApplication::dump_set_texture(unsigned index)

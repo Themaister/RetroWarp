@@ -3,7 +3,10 @@
 #extension GL_EXT_shader_8bit_storage : require
 #extension GL_EXT_samplerless_texture_functions : require
 
-#ifdef DERIVATIVE_GROUP_LINEAR
+#if defined(DERIVATIVE_GROUP_QUAD)
+#extension GL_NV_compute_shader_derivatives : require
+layout(derivative_group_quadsNV, local_size_x = 16, local_size_y = 16) in;
+#elif defined(DERIVATIVE_GROUP_LINEAR)
 #extension GL_NV_compute_shader_derivatives : require
 layout(derivative_group_linearNV, local_size_x = 256) in;
 #elif SUBGROUP
@@ -61,7 +64,7 @@ layout(std430, set = 0, binding = 3) writeonly buffer Flags
 
 layout(set = 1, binding = 0) uniform sampler2D uTexture;
 
-#if !SUBGROUP && !defined(DERIVATIVE_GROUP_LINEAR)
+#if !SUBGROUP && !defined(DERIVATIVE_GROUP_LINEAR) && !defined(DERIVATIVE_GROUP_QUAD)
 shared float shared_u[gl_WorkGroupSize.x];
 shared float shared_v[gl_WorkGroupSize.x];
 #endif
@@ -75,7 +78,9 @@ void main()
     uint tile_instance_index = uint(tile_raster_work[work_instance].instance);
     uint primitive_index = uint(tile_raster_work[work_instance].prim);
 
-#ifdef DERIVATIVE_GROUP_LINEAR
+#if defined(DERIVATIVE_GROUP_QUAD)
+    uint local_index = gl_LocalInvocationIndex;
+#elif defined(DERIVATIVE_GROUP_LINEAR)
     uint local_index = gl_LocalInvocationIndex;
 #elif SUBGROUP
     uint local_index = gl_SubgroupInvocationID + gl_SubgroupID * gl_SubgroupSize;
@@ -83,6 +88,11 @@ void main()
     uint local_index = gl_LocalInvocationIndex;
 #endif
 
+#ifdef DERIVATIVE_GROUP_QUAD
+    uint local_pixel = local_index;
+    int x = int(tile_x * uint(TILE_WIDTH) + gl_LocalInvocationID.x);
+    int y = int(tile_y * uint(TILE_HEIGHT) + gl_LocalInvocationID.y);
+#else
     uint quad_index = local_index >> 2u;
     uint quad_x = quad_index & 7u;
     uint quad_y = (quad_index >> 3u) & 7u;
@@ -93,12 +103,13 @@ void main()
 
     int x = int(tile_x * uint(TILE_WIDTH) + local_x);
     int y = int(tile_y * uint(TILE_HEIGHT) + local_y);
+#endif
 
     ivec2 interpolation_base = get_interpolation_base(primitive_index);
     vec3 bary = interpolate_barycentrics(primitive_index, x, y, interpolation_base);
     vec2 f_uv = interpolate_uv(primitive_index, bary);
 
-#ifdef DERIVATIVE_GROUP_LINEAR
+#if defined(DERIVATIVE_GROUP_LINEAR) || defined(DERIVATIVE_GROUP_QUAD)
     f_uv /= textureSize(uTexture, 0).xy;
     vec4 tex = texture(uTexture, f_uv);
 #elif SUBGROUP
@@ -126,7 +137,7 @@ void main()
     float dvdx = abs(f_uv_horiz.y - f_uv.y);
     float dvdy = abs(f_uv_vert.y - f_uv.y);
     float f_width = max(dudx + dudy, dudx + dudy);
-#elif !defined(DERIVATIVE_GROUP_LINEAR)
+#elif !defined(DERIVATIVE_GROUP_LINEAR) && !defined(DERIVATIVE_GROUP_QUAD)
     float dudx = abs(shared_u[local_index ^ 1u] - f_uv.x);
     float dudy = abs(shared_u[local_index ^ 2u] - f_uv.x);
     float dvdx = abs(shared_v[local_index ^ 1u] - f_uv.y);
@@ -134,7 +145,7 @@ void main()
     float f_width = max(dudx + dudy, dudx + dudy);
 #endif
 
-#ifndef DERIVATIVE_GROUP_LINEAR
+#if !defined(DERIVATIVE_GROUP_LINEAR) && !defined(DERIVATIVE_GROUP_QUAD)
     f_width = max(f_width, 1.0);
     float f_lod = log2(f_width);
     f_uv /= textureSize(uTexture, 0).xy;

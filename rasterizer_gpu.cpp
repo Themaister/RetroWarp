@@ -577,7 +577,12 @@ void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 		                                        VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
 		                                        VK_SUBGROUP_FEATURE_BALLOT_BIT;
 
-		if (features.compute_shader_derivative_features.computeDerivativeGroupLinear)
+		if (features.compute_shader_derivative_features.computeDerivativeGroupQuads)
+		{
+			cmd.set_program("assets://shaders/combiner.comp", {{"DERIVATIVE_GROUP_QUAD", 1}, {"SUBGROUP", 0}});
+			cmd.dispatch_indirect(*raster_work.item_count_per_variant, 16 * variant);
+		}
+		else if (features.compute_shader_derivative_features.computeDerivativeGroupLinear)
 		{
 			cmd.set_program("assets://shaders/combiner.comp", {{"DERIVATIVE_GROUP_LINEAR", 1}, {"SUBGROUP", 0}});
 			cmd.dispatch_indirect(*raster_work.item_count_per_variant, 16 * variant);
