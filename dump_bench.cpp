@@ -266,5 +266,5 @@ int main(int argc, char **argv)
 	auto end_run = Util::get_current_time_nsecs();
 	LOGI("Total time: %.3f s\n", (end_run - start_run) * 1e-9);
 
-	rasterizer.save_canvas("/tmp/canvas.png");
+	rasterizer.save_canvas("canvas.png");
 }
