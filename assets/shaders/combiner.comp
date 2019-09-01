@@ -1,7 +1,6 @@
 #version 450
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_8bit_storage : require
-#extension GL_EXT_samplerless_texture_functions : require
 
 #if defined(DERIVATIVE_GROUP_QUAD)
 #extension GL_NV_compute_shader_derivatives : require
@@ -110,8 +109,10 @@ void main()
     vec2 f_uv = interpolate_uv(primitive_index, bary);
 
 #if defined(DERIVATIVE_GROUP_LINEAR) || defined(DERIVATIVE_GROUP_QUAD)
-    f_uv /= textureSize(uTexture, 0).xy;
-    vec4 tex = texture(uTexture, f_uv);
+    vec2 f_width_2 = fwidth(f_uv);
+    float f_lod = log2(max(1.0, max(f_width_2.x, f_width_2.y)));
+    f_uv /= vec2(textureSize(uTexture, 0));
+    vec4 tex = textureLod(uTexture, f_uv, f_lod);
 #elif SUBGROUP
     vec2 f_uv_horiz = subgroupShuffleXor(f_uv, 1);
     vec2 f_uv_vert = subgroupShuffleXor(f_uv, 2);

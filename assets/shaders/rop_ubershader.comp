@@ -1,0 +1,190 @@
+#version 450
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage : require
+
+#if defined(DERIVATIVE_GROUP_QUAD)
+#extension GL_NV_compute_shader_derivatives : require
+layout(derivative_group_quadsNV, local_size_x = 16, local_size_y = 16) in;
+#elif defined(DERIVATIVE_GROUP_LINEAR)
+#extension GL_NV_compute_shader_derivatives : require
+layout(derivative_group_linearNV, local_size_x = 256) in;
+#elif SUBGROUP
+#extension GL_KHR_shader_subgroup_shuffle : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_ballot : require
+layout(local_size_x = 256) in;
+#else
+layout(local_size_x = 256) in;
+#endif
+
+#define PRIMITIVE_SETUP_POS_BUFFER 4
+#define PRIMITIVE_SETUP_ATTR_BUFFER 5
+#include "rasterizer_helpers.h"
+
+layout(std430, set = 0, binding = 6) readonly buffer StateIndices
+{
+    uint8_t state_indices[];
+};
+
+layout(std430, set = 0, binding = 0) buffer ColorFramebuffer
+{
+    u8vec4 color_data[];
+};
+
+layout(std430, set = 0, binding = 1) buffer DepthFramebuffer
+{
+    uint16_t depth_data[];
+};
+
+layout(std430, set = 0, binding = 2) readonly buffer Binning
+{
+    uint binning_bitmask[];
+};
+
+layout(std430, set = 0, binding = 3) readonly buffer CoarseBinning
+{
+    uint coarse_binning_bitmask[];
+};
+
+layout(set = 1, binding = 0) uniform sampler2D uTextures[16];
+
+#if !SUBGROUP && !defined(DERIVATIVE_GROUP_LINEAR) && !defined(DERIVATIVE_GROUP_QUAD)
+shared float shared_u[gl_WorkGroupSize.x];
+shared float shared_v[gl_WorkGroupSize.x];
+#endif
+
+void main()
+{
+    ivec2 tile = ivec2(gl_WorkGroupID.xy);
+    int linear_tile = tile.x + tile.y * MAX_TILES_X;
+    int linear_tile_base = linear_tile * TILE_BINNING_STRIDE;
+    int linear_tile_base_coarse = linear_tile * TILE_BINNING_STRIDE_COARSE;
+
+    int primitive_mask_count = fb_info.primitive_count_32;
+    int primitive_coarse_mask_count = fb_info.primitive_count_1024;
+
+#if defined(DERIVATIVE_GROUP_QUAD)
+    uint local_index = gl_LocalInvocationIndex;
+#elif defined(DERIVATIVE_GROUP_LINEAR)
+    uint local_index = gl_LocalInvocationIndex;
+#elif SUBGROUP
+    uint local_index = gl_SubgroupInvocationID + gl_SubgroupID * gl_SubgroupSize;
+#else
+    uint local_index = gl_LocalInvocationIndex;
+#endif
+
+#ifdef DERIVATIVE_GROUP_QUAD
+    uint local_pixel = local_index;
+    int x = int(gl_WorkGroupID.x * uint(TILE_WIDTH) + gl_LocalInvocationID.x);
+    int y = int(gl_WorkGroupID.y * uint(TILE_HEIGHT) + gl_LocalInvocationID.y);
+#else
+    uint quad_index = local_index >> 2u;
+    uint quad_x = quad_index & 7u;
+    uint quad_y = (quad_index >> 3u) & 7u;
+
+    uint local_x = quad_x * 2u + (local_index & 1u);
+    uint local_y = quad_y * 2u + ((local_index >> 1u) & 1u);
+
+    int x = int(gl_WorkGroupID.x * uint(TILE_WIDTH) + local_x);
+    int y = int(gl_WorkGroupID.y * uint(TILE_HEIGHT) + local_y);
+#endif
+
+    int pixel_index = x + y * fb_info.fb_stride;
+    uvec2 coord = uvec2(x, y);
+
+    uvec4 current_color = uvec4(0);
+    uint current_z = 0;
+    if (all(lessThan(coord, fb_info.resolution)))
+    {
+        current_color = uvec4(color_data[pixel_index]);
+        current_z = uint(depth_data[pixel_index]);
+    }
+
+    for (int coarse_mask_index = 0; coarse_mask_index < primitive_coarse_mask_count; coarse_mask_index++)
+    {
+        uint coarse_binned = coarse_binning_bitmask[linear_tile_base_coarse + coarse_mask_index];
+        while (coarse_binned != 0u)
+        {
+            int mask_index = findLSB(coarse_binned);
+            coarse_binned &= ~uint(1 << mask_index);
+            mask_index += coarse_mask_index * 32;
+            uint binned = binning_bitmask[linear_tile_base + mask_index];
+
+            while (binned != 0u)
+            {
+                int i = findLSB(binned);
+                binned &= ~uint(1 << i);
+                uint primitive_index = uint(i + 32 * mask_index);
+
+                ivec2 interpolation_base = get_interpolation_base(primitive_index);
+                vec3 bary = interpolate_barycentrics(primitive_index, x, y, interpolation_base);
+                vec2 f_uv = interpolate_uv(primitive_index, bary);
+
+                uint tex_index = uint(state_indices[primitive_index]);
+
+#if defined(DERIVATIVE_GROUP_LINEAR) || defined(DERIVATIVE_GROUP_QUAD)
+                vec2 f_width_2 = fwidth(f_uv);
+                float f_lod = log2(max(1.0, max(f_width_2.x, f_width_2.y)));
+                f_uv /= vec2(textureSize(uTextures[tex_index], 0));
+                vec4 tex = textureLod(uTextures[tex_index], f_uv, f_lod);
+#elif SUBGROUP
+                vec2 f_uv_horiz = subgroupShuffleXor(f_uv, 1);
+                vec2 f_uv_vert = subgroupShuffleXor(f_uv, 2);
+#else
+                barrier();
+                shared_u[local_index] = f_uv.x;
+                shared_v[local_index] = f_uv.y;
+                barrier();
+#endif
+
+                bool has_coverage = test_coverage_single(primitive_index, x, y);
+                if (!has_coverage)
+                    continue;
+
+                // We've passed the rasterization test. Interpolate colors, Z, 1/W.
+                vec4 rgba = interpolate_rgba(primitive_index, bary);
+
+#if SUBGROUP
+                float dudx = abs(f_uv_horiz.x - f_uv.x);
+                float dudy = abs(f_uv_vert.x - f_uv.x);
+                float dvdx = abs(f_uv_horiz.y - f_uv.y);
+                float dvdy = abs(f_uv_vert.y - f_uv.y);
+                float f_width = max(dudx + dudy, dudx + dudy);
+#elif !defined(DERIVATIVE_GROUP_LINEAR) && !defined(DERIVATIVE_GROUP_QUAD)
+                float dudx = abs(shared_u[local_index ^ 1u] - f_uv.x);
+                float dudy = abs(shared_u[local_index ^ 2u] - f_uv.x);
+                float dvdx = abs(shared_v[local_index ^ 1u] - f_uv.y);
+                float dvdy = abs(shared_v[local_index ^ 2u] - f_uv.y);
+                float f_width = max(dudx + dudy, dudx + dudy);
+#endif
+
+#if !defined(DERIVATIVE_GROUP_LINEAR) && !defined(DERIVATIVE_GROUP_QUAD)
+                f_width = max(f_width, 1.0);
+                float f_lod = log2(f_width);
+                f_uv /= vec2(textureSize(uTextures[tex_index], 0));
+                vec4 tex = textureLod(uTextures[tex_index], f_uv, f_lod);
+#endif
+
+                if (tex.w < 0.5)
+                    continue;
+
+                rgba *= tex;
+                rgba = clamp(rgba, 0.0, 255.0);
+                uint z = interpolate_z(primitive_index, x, y, interpolation_base);
+
+                uvec4 urgba = uvec4(round(rgba));
+                if (z < current_z)
+                {
+                    current_z = z;
+                    current_color = urgba;
+                }
+            }
+        }
+    }
+
+    if (all(lessThan(coord, fb_info.resolution)))
+    {
+        color_data[pixel_index] = u8vec4(current_color);
+        depth_data[pixel_index] = uint16_t(current_z);
+    }
+}

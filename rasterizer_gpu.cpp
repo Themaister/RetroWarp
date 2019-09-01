@@ -17,6 +17,7 @@ struct BBox
 };
 
 constexpr bool ENABLE_SUBGROUP = true;
+constexpr bool ENABLE_UBERSHADER = false;
 
 struct RasterizerGPU::Impl
 {
@@ -106,6 +107,8 @@ struct RasterizerGPU::Impl
 	void init_tile_buffers();
 	void init_raster_work_buffers();
 	void flush();
+	void flush_ubershader();
+	void flush_split();
 
 	void queue_primitive(const PrimitiveSetup &setup);
 	unsigned compute_num_conservative_tiles(const PrimitiveSetup &setup) const;
@@ -124,6 +127,7 @@ struct RasterizerGPU::Impl
 	void distribute_combiner_work(CommandBuffer &cmd);
 	void dispatch_combiner_work(CommandBuffer &cmd);
 	void run_rop(CommandBuffer &cmd);
+	void run_rop_ubershader(CommandBuffer &cmd);
 
 	void test_prefix_sum();
 
@@ -629,6 +633,57 @@ void RasterizerGPU::Impl::set_fb_info(CommandBuffer &cmd)
 	fb_info->primitive_count_1024 = (staging.count + 1023) / 1024;
 }
 
+void RasterizerGPU::Impl::run_rop_ubershader(CommandBuffer &cmd)
+{
+	cmd.begin_region("run-rop");
+	cmd.set_program("assets://shaders/rop_ubershader.comp");
+	cmd.set_storage_buffer(0, 0, *color_buffer);
+	cmd.set_storage_buffer(0, 1, *depth_buffer);
+	cmd.set_storage_buffer(0, 2, *binning.mask_buffer);
+	cmd.set_storage_buffer(0, 3, *binning.mask_buffer_coarse);
+	cmd.set_storage_buffer(0, 4, *staging.positions_gpu);
+	cmd.set_storage_buffer(0, 5, *staging.attributes_gpu);
+	cmd.set_storage_buffer(0, 6, *staging.state_index_gpu);
+
+	for (unsigned i = 0; i < NUM_STATE_INDICES; i++)
+	{
+		cmd.set_texture(1, i, state.active_state_indices[i] ? *state.image_views[i] : *state.image_views[0],
+		                StockSampler::TrilinearWrap);
+	}
+
+	auto &features = device->get_device_features();
+	const VkSubgroupFeatureFlags required = VK_SUBGROUP_FEATURE_BASIC_BIT |
+	                                        VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
+	                                        VK_SUBGROUP_FEATURE_BALLOT_BIT;
+
+	if (features.compute_shader_derivative_features.computeDerivativeGroupQuads)
+	{
+		cmd.set_program("assets://shaders/rop_ubershader.comp", {{"DERIVATIVE_GROUP_QUAD", 1}, {"SUBGROUP", 0}});
+	}
+	else if (features.compute_shader_derivative_features.computeDerivativeGroupLinear)
+	{
+		cmd.set_program("assets://shaders/rop_ubershader.comp", {{"DERIVATIVE_GROUP_LINEAR", 1}, {"SUBGROUP", 0}});
+	}
+	else if (ENABLE_SUBGROUP && (features.subgroup_properties.supportedOperations & required) == required &&
+	         (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
+	         can_support_minimum_subgroup_size(4))
+	{
+		cmd.set_program("assets://shaders/rop_ubershader.comp", {{"SUBGROUP", 1}});
+
+		if (supports_subgroup_size_control())
+		{
+			cmd.set_subgroup_size_log2(true, 2, 7);
+			cmd.enable_subgroup_size_control(true);
+		}
+	}
+	else
+		cmd.set_program("assets://shaders/rop_ubershader.comp", {{"SUBGROUP", 0}});
+
+	cmd.dispatch((width + TILE_WIDTH - 1) / TILE_WIDTH, (height + TILE_HEIGHT - 1) / TILE_HEIGHT, 1);
+	cmd.end_region();
+	cmd.enable_subgroup_size_control(false);
+}
+
 void RasterizerGPU::Impl::run_rop(CommandBuffer &cmd)
 {
 	cmd.begin_region("run-rop");
@@ -646,7 +701,50 @@ void RasterizerGPU::Impl::run_rop(CommandBuffer &cmd)
 	cmd.end_region();
 }
 
-void RasterizerGPU::Impl::flush()
+void RasterizerGPU::Impl::flush_ubershader()
+{
+	end_staging();
+	if (staging.count == 0)
+	{
+		memset(state.active_state_indices, 0, sizeof(state.active_state_indices));
+		return;
+	}
+
+	auto cmd = device->request_command_buffer();
+
+	set_fb_info(*cmd);
+
+	auto t0 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+
+	binning_low_res_prepass(*cmd);
+
+	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+
+	auto t1 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+	device->register_time_interval(t0, t1, "binning-low-res-prepass");
+
+	binning_full_res(*cmd);
+
+	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+
+	auto t2 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+	device->register_time_interval(t1, t2, "binning-full-res");
+
+	run_rop_ubershader(*cmd);
+
+	auto t3 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+	device->register_time_interval(t2, t3, "rop-ubershader");
+
+	device->submit(cmd);
+	reset_staging();
+
+	memset(state.active_state_indices, 0, sizeof(state.active_state_indices));
+	device->register_time_interval(t0, t3, "iteration");
+}
+
+void RasterizerGPU::Impl::flush_split()
 {
 	end_staging();
 	if (staging.count == 0)
@@ -1026,7 +1124,7 @@ void RasterizerGPU::clear_color(uint32_t rgba)
 
 void RasterizerGPU::Impl::queue_primitive(const PrimitiveSetup &setup)
 {
-	unsigned num_conservative_tiles = compute_num_conservative_tiles(setup);
+	unsigned num_conservative_tiles = ENABLE_UBERSHADER ? 0 : compute_num_conservative_tiles(setup);
 
 	if (staging.count == MAX_PRIMITIVES)
 		flush();
@@ -1176,6 +1274,14 @@ void RasterizerGPU::init(Device &device)
 void RasterizerGPU::flush()
 {
 	impl->flush();
+}
+
+void RasterizerGPU::Impl::flush()
+{
+	if (ENABLE_UBERSHADER)
+		flush_ubershader();
+	else
+		flush_split();
 }
 
 }
