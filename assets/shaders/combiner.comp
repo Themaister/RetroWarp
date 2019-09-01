@@ -186,8 +186,8 @@ void main()
     vec2 f_uv = interpolate_uv(primitive_index, bary);
 
 #ifdef DERIVATIVE_GROUP_LINEAR
-    vec2 f_width2 = fwidth(f_uv);
-    float f_width = max(f_width2.x, f_width2.y);
+    f_uv /= textureSize(uTexture, 0).xy;
+    vec4 tex = texture(uTexture, f_uv);
 #elif SUBGROUP
     vec2 f_uv_horiz = subgroupShuffleXor(f_uv, 1);
     vec2 f_uv_vert = subgroupShuffleXor(f_uv, 2);
@@ -221,11 +221,13 @@ void main()
     float f_width = max(dudx + dudy, dudx + dudy);
 #endif
 
+#ifndef DERIVATIVE_GROUP_LINEAR
     f_width = max(f_width, 1.0);
     float f_lod = log2(f_width);
     f_uv /= textureSize(uTexture, 0).xy;
-
     vec4 tex = textureLod(uTexture, f_uv, f_lod);
+#endif
+
     if (tex.w < 0.5)
     {
         flag_tiles[tile_instance_index].flag[local_pixel] = uint8_t(0);
@@ -233,6 +235,7 @@ void main()
     }
 
     rgba *= tex;
+    rgba = clamp(rgba, 0.0, 255.0);
     uint z = interpolate_z(primitive_index, x, y, interpolation_base);
 
     uvec4 urgba = uvec4(round(rgba));

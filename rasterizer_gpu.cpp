@@ -577,9 +577,7 @@ void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 		                                        VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
 		                                        VK_SUBGROUP_FEATURE_BALLOT_BIT;
 
-		// Compiler seems to be a bit buggy on NV, ironic.
-		if (device->get_gpu_properties().vendorID != VENDOR_ID_NVIDIA &&
-		    features.compute_shader_derivative_features.computeDerivativeGroupLinear)
+		if (features.compute_shader_derivative_features.computeDerivativeGroupLinear)
 		{
 			cmd.set_program("assets://shaders/combiner.comp", {{"DERIVATIVE_GROUP_LINEAR", 1}, {"SUBGROUP", 0}});
 			cmd.dispatch_indirect(*raster_work.item_count_per_variant, 16 * variant);
