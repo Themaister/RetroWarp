@@ -243,8 +243,8 @@ struct SWRenderApplication : Application, EventHandler
 	void dump_primitives(const PrimitiveSetup *setup, unsigned count);
 };
 
-constexpr unsigned WIDTH = 1280;
-constexpr unsigned HEIGHT = 720;
+constexpr unsigned WIDTH = 1920;
+constexpr unsigned HEIGHT = 1080;
 
 void SWRenderApplication::on_device_created(const Vulkan::DeviceCreatedEvent& e)
 {
