@@ -241,6 +241,15 @@ struct SWRenderApplication : Application, EventHandler
 	void dump_textures(const std::vector<SceneFormats::MemoryMappedTexture *> &textures);
 	void dump_set_texture(unsigned index);
 	void dump_primitives(const PrimitiveSetup *setup, unsigned count);
+
+	struct Cached
+	{
+		unsigned index;
+		const Vulkan::ImageView *view;
+		PrimitiveSetup setup;
+	};
+	std::vector<Cached> setup_cache;
+	bool update_setup_cache = true;
 };
 
 constexpr unsigned WIDTH = 1920;
@@ -340,6 +349,8 @@ bool SWRenderApplication::on_key_pressed(const KeyboardEvent &e)
 {
 	if (e.get_key_state() == KeyState::Pressed && e.get_key() == Key::C)
 		queue_dump_frame = true;
+	else if (e.get_key_state() == KeyState::Pressed && e.get_key() == Key::U)
+		update_setup_cache = !update_setup_cache;
 	return true;
 }
 
@@ -397,54 +408,65 @@ void SWRenderApplication::render_frame(double, double)
 		dump_textures(source_paths);
 	}
 
-	unsigned current_state[RasterizerGPU::NUM_STATE_INDICES];
-	for (unsigned i = 0; i < RasterizerGPU::NUM_STATE_INDICES; i++)
-		current_state[i] = ~0u;
-
-	for (auto &renderable : renderables)
+	if (update_setup_cache)
 	{
-		auto &m = get_component<RenderInfoComponent>(renderable)->transform->world_transform;
-		mat4 mvp = vp * m;
-		mat3 n = mat3(m);
-		auto *sw = get_component<SoftwareRenderableComponent>(renderable);
+		setup_cache.clear();
+		for (auto &renderable : renderables)
+		{
+			auto &m = get_component<RenderInfoComponent>(renderable)->transform->world_transform;
+			mat4 mvp = vp * m;
+			mat3 n = mat3(m);
+			auto *sw = get_component<SoftwareRenderableComponent>(renderable);
 
-		unsigned masked_state_index = sw->state_index & (RasterizerGPU::NUM_STATE_INDICES - 1);
+			auto *render = get_component<RenderableComponent>(renderable);
+			auto *static_mesh = dynamic_cast<ImportedMesh *>(render->renderable.get());
+			if (!static_mesh)
+				continue;
+
+			size_t vertex_count = sw->vertices.size();
+			for (size_t i = 0; i < vertex_count; i++)
+				transform_vertex(sw->transformed_vertices[i], sw->vertices[i], mvp, n);
+
+			for (auto &primitive : sw->indices)
+			{
+				input.vertices[0] = sw->transformed_vertices[primitive.x];
+				input.vertices[1] = sw->transformed_vertices[primitive.y];
+				input.vertices[2] = sw->transformed_vertices[primitive.z];
+				unsigned count = setup_clipped_triangles(setups, input, CullMode::CCWOnly, viewport_transform);
+				for (unsigned i = 0; i < count; i++)
+					setup_cache.push_back({ sw->state_index, &static_mesh->material->textures[Util::ecast(Material::Textures::BaseColor)]->get_image()->get_view(), setups[i] });
+			}
+		}
+	}
+	else
+		LOGI("Cached %u primitive setups!\n", unsigned(setup_cache.size()));
+
+	unsigned current_state[RasterizerGPU::NUM_STATE_INDICES];
+	for (auto &state : current_state)
+		state = ~0u;
+
+	for (auto &setup : setup_cache)
+	{
+		unsigned masked_state_index = setup.index & (RasterizerGPU::NUM_STATE_INDICES - 1);
 		if (current_state[masked_state_index] != ~0u &&
-		    current_state[masked_state_index] != sw->state_index)
+		    current_state[masked_state_index] != setup.index)
 		{
 			rasterizer_gpu.flush();
+			for (auto &state : current_state)
+				state = ~0u;
 		}
 
 		if (queue_dump_frame)
-			dump_set_texture(sw->state_index);
+			dump_set_texture(setup.index);
 
-		current_state[masked_state_index] = sw->state_index;
+		current_state[masked_state_index] = setup.index;
 
-		sampler.layout = &sw->color_texture.get_layout();
-
-		auto *render = get_component<RenderableComponent>(renderable);
-		auto *static_mesh = dynamic_cast<ImportedMesh *>(render->renderable.get());
-		if (!static_mesh)
-			continue;
-
-		auto *gpu_texture = static_mesh->material->textures[Util::ecast(Material::Textures::BaseColor)];
 		rasterizer_gpu.set_state_index(masked_state_index);
-		rasterizer_gpu.set_texture(masked_state_index, gpu_texture->get_image()->get_view());
+		rasterizer_gpu.set_texture(masked_state_index, *setup.view);
 
-		size_t vertex_count = sw->vertices.size();
-		for (size_t i = 0; i < vertex_count; i++)
-			transform_vertex(sw->transformed_vertices[i], sw->vertices[i], mvp, n);
-
-		for (auto &primitive : sw->indices)
-		{
-			input.vertices[0] = sw->transformed_vertices[primitive.x];
-			input.vertices[1] = sw->transformed_vertices[primitive.y];
-			input.vertices[2] = sw->transformed_vertices[primitive.z];
-			unsigned count = setup_clipped_triangles(setups, input, CullMode::CCWOnly, viewport_transform);
-			rasterizer_gpu.rasterize_primitives(setups, count);
-			if (queue_dump_frame)
-				dump_primitives(setups, count);
-		}
+		rasterizer_gpu.rasterize_primitives(&setup.setup, 1);
+		if (queue_dump_frame)
+			dump_primitives(&setup.setup, 1);
 	}
 
 	auto image_gpu = rasterizer_gpu.copy_to_framebuffer();
