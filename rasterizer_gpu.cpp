@@ -315,11 +315,7 @@ void RasterizerGPU::Impl::end_staging()
 		cmd->copy_buffer(*staging.state_index_gpu, 0, *staging.state_index, 0, staging.count * sizeof(uint8_t));
 		Semaphore sem;
 		device->submit(cmd, nullptr, 1, &sem);
-
-		if (ENABLE_UBERSHADER)
-			device->add_wait_semaphore(CommandBuffer::Type::Generic, sem, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, true);
-		else
-			device->add_wait_semaphore(CommandBuffer::Type::AsyncCompute, sem, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, true);
+		device->add_wait_semaphore(CommandBuffer::Type::AsyncCompute, sem, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, true);
 	}
 }
 
@@ -643,8 +639,8 @@ void RasterizerGPU::Impl::run_rop_ubershader(CommandBuffer &cmd)
 	cmd.set_program("assets://shaders/rop_ubershader.comp");
 	cmd.set_storage_buffer(0, 0, *color_buffer);
 	cmd.set_storage_buffer(0, 1, *depth_buffer);
-	cmd.set_storage_buffer(0, 2, *binning.mask_buffer[0]);
-	cmd.set_storage_buffer(0, 3, *binning.mask_buffer_coarse[0]);
+	cmd.set_storage_buffer(0, 2, *binning.mask_buffer[tile_instance_data.index]);
+	cmd.set_storage_buffer(0, 3, *binning.mask_buffer_coarse[tile_instance_data.index]);
 	cmd.set_storage_buffer(0, 4, *staging.positions_gpu);
 	cmd.set_storage_buffer(0, 5, *staging.attributes_gpu);
 	cmd.set_storage_buffer(0, 6, *staging.state_index_gpu);
@@ -714,38 +710,64 @@ void RasterizerGPU::Impl::flush_ubershader()
 		return;
 	}
 
-	auto cmd = device->request_command_buffer();
+	auto cmd = device->request_command_buffer(CommandBuffer::Type::AsyncCompute);
 
 	set_fb_info(*cmd);
 
 	auto t0 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 
 	binning_low_res_prepass(*cmd);
-
 	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
 
 	auto t1 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 	device->register_time_interval(t0, t1, "binning-low-res-prepass");
+	device->submit(cmd);
+
+	auto &rop_sem = tile_instance_data.rop_complete[tile_instance_data.index];
+	if (rop_sem)
+	{
+		device->add_wait_semaphore(CommandBuffer::Type::AsyncCompute, rop_sem, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, true);
+		rop_sem.reset();
+	}
+
+	cmd = device->request_command_buffer(CommandBuffer::Type::AsyncCompute);
+	set_fb_info(*cmd);
+
+	t1 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 
 	binning_full_res(*cmd);
 
-	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
-
 	auto t2 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 	device->register_time_interval(t1, t2, "binning-full-res");
+
+	Semaphore sem;
+	device->submit(cmd, nullptr, 1, &sem);
+	device->add_wait_semaphore(CommandBuffer::Type::Generic, sem, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, true);
+
+	cmd = device->request_command_buffer();
+	set_fb_info(*cmd);
+
+	t2 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+
+	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+	             VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+	             VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT);
 
 	run_rop_ubershader(*cmd);
 
 	auto t3 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 	device->register_time_interval(t2, t3, "rop-ubershader");
 
-	device->submit(cmd);
+	sem.reset();
+	device->submit(cmd, nullptr, 1, &sem);
+	tile_instance_data.rop_complete[tile_instance_data.index] = sem;
 	reset_staging();
 
 	memset(state.active_state_indices, 0, sizeof(state.active_state_indices));
 	device->register_time_interval(t0, t3, "iteration");
+	tile_instance_data.index ^= 1;
 }
 
 void RasterizerGPU::Impl::flush_split()
