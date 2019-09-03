@@ -57,9 +57,11 @@ struct RasterizerGPU::Impl
 
 	struct
 	{
-		BufferHandle color;
-		BufferHandle depth;
-		BufferHandle flags;
+		BufferHandle color[2];
+		BufferHandle depth[2];
+		BufferHandle flags[2];
+		unsigned index = 0;
+		Semaphore rop_complete[2];
 	} tile_instance_data;
 
 	struct
@@ -558,9 +560,9 @@ bool RasterizerGPU::Impl::supports_subgroup_size_control() const
 void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 {
 	cmd.begin_region("dispatch-combiner-work");
-	cmd.set_storage_buffer(0, 1, *tile_instance_data.color);
-	cmd.set_storage_buffer(0, 2, *tile_instance_data.depth);
-	cmd.set_storage_buffer(0, 3, *tile_instance_data.flags);
+	cmd.set_storage_buffer(0, 1, *tile_instance_data.color[tile_instance_data.index]);
+	cmd.set_storage_buffer(0, 2, *tile_instance_data.depth[tile_instance_data.index]);
+	cmd.set_storage_buffer(0, 3, *tile_instance_data.flags[tile_instance_data.index]);
 	cmd.set_storage_buffer(0, 4, *staging.positions_gpu);
 	cmd.set_storage_buffer(0, 5, *staging.attributes_gpu);
 
@@ -692,9 +694,9 @@ void RasterizerGPU::Impl::run_rop(CommandBuffer &cmd)
 	cmd.set_storage_buffer(0, 1, *depth_buffer);
 	cmd.set_storage_buffer(0, 2, *binning.mask_buffer);
 	cmd.set_storage_buffer(0, 3, *binning.mask_buffer_coarse);
-	cmd.set_storage_buffer(0, 4, *tile_instance_data.color);
-	cmd.set_storage_buffer(0, 5, *tile_instance_data.depth);
-	cmd.set_storage_buffer(0, 6, *tile_instance_data.flags);
+	cmd.set_storage_buffer(0, 4, *tile_instance_data.color[tile_instance_data.index]);
+	cmd.set_storage_buffer(0, 5, *tile_instance_data.depth[tile_instance_data.index]);
+	cmd.set_storage_buffer(0, 6, *tile_instance_data.flags[tile_instance_data.index]);
 	cmd.set_storage_buffer(0, 7, *tile_count.tile_offset);
 	cmd.set_storage_buffer(0, 8, *tile_count.tile_prefix_sum);
 	cmd.dispatch((width + TILE_WIDTH - 1) / TILE_WIDTH, (height + TILE_HEIGHT - 1) / TILE_HEIGHT, 1);
@@ -753,7 +755,7 @@ void RasterizerGPU::Impl::flush_split()
 		return;
 	}
 
-	auto cmd = device->request_command_buffer();
+	auto cmd = device->request_command_buffer(CommandBuffer::Type::AsyncCompute);
 
 	set_fb_info(*cmd);
 
@@ -828,15 +830,31 @@ void RasterizerGPU::Impl::flush_split()
 
 	auto t7 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 	device->register_time_interval(t6, t7, "distribute-combiner-work");
+	device->submit(cmd);
 
+	auto &rop_sem = tile_instance_data.rop_complete[tile_instance_data.index ^ 1];
+	if (rop_sem)
+	{
+		device->add_wait_semaphore(CommandBuffer::Type::AsyncCompute,
+		                           rop_sem,
+		                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, true);
+		rop_sem.reset();
+	}
+
+	cmd = device->request_command_buffer(CommandBuffer::Type::AsyncCompute);
+	set_fb_info(*cmd);
+	t7 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 	dispatch_combiner_work(*cmd);
-
-	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
-	             VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
-	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
-
 	auto t8 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 	device->register_time_interval(t7, t8, "dispatch-combiner-work");
+
+	Semaphore sem;
+	device->submit(cmd, nullptr, 1, &sem);
+	device->add_wait_semaphore(CommandBuffer::Type::Generic, sem, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, true);
+	cmd = device->request_command_buffer();
+	set_fb_info(*cmd);
+
+	t8 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 
 	// ROP.
 	run_rop(*cmd);
@@ -846,10 +864,14 @@ void RasterizerGPU::Impl::flush_split()
 
 	device->register_time_interval(t0, t9, "iteration");
 
-	device->submit(cmd);
+	sem.reset();
+	device->submit(cmd, nullptr, 1, &sem);
+	tile_instance_data.rop_complete[tile_instance_data.index] = sem;
+
 	reset_staging();
 
 	memset(state.active_state_indices, 0, sizeof(state.active_state_indices));
+	tile_instance_data.index ^= 1;
 }
 
 void RasterizerGPU::Impl::init_binning_buffers()
@@ -900,11 +922,14 @@ void RasterizerGPU::Impl::init_tile_buffers()
 	             VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 
 	info.size = MAX_NUM_TILE_INSTANCES * TILE_WIDTH * TILE_HEIGHT * sizeof(uint32_t);
-	tile_instance_data.color = device->create_buffer(info);
+	for (auto &color : tile_instance_data.color)
+		color = device->create_buffer(info);
 	info.size = MAX_NUM_TILE_INSTANCES * TILE_WIDTH * TILE_HEIGHT * sizeof(uint16_t);
-	tile_instance_data.depth = device->create_buffer(info);
+	for (auto &depth : tile_instance_data.depth)
+		depth = device->create_buffer(info);
 	info.size = MAX_NUM_TILE_INSTANCES * TILE_WIDTH * TILE_HEIGHT * sizeof(uint8_t);
-	tile_instance_data.flags = device->create_buffer(info);
+	for (auto &flags : tile_instance_data.flags)
+		flags = device->create_buffer(info);
 }
 
 void RasterizerGPU::Impl::init_raster_work_buffers()
