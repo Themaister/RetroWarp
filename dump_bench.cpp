@@ -197,6 +197,8 @@ int main(int argc, char **argv)
 		auto info = Vulkan::ImageCreateInfo::immutable_2d_image(tex_file.get_layout().get_width(),
 		                                                        tex_file.get_layout().get_height(),
 		                                                        VK_FORMAT_R8G8B8A8_UNORM, true);
+		info.misc = Vulkan::IMAGE_MISC_CONCURRENT_QUEUE_ASYNC_COMPUTE_BIT |
+		            Vulkan::IMAGE_MISC_CONCURRENT_QUEUE_GRAPHICS_BIT;
 		textures[i] = device.create_image_from_staging_buffer(info, &staging);
 	}
 
