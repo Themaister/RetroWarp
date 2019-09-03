@@ -252,8 +252,8 @@ struct SWRenderApplication : Application, EventHandler
 	bool update_setup_cache = true;
 };
 
-constexpr unsigned WIDTH = 1920;
-constexpr unsigned HEIGHT = 1080;
+constexpr unsigned WIDTH = 640;
+constexpr unsigned HEIGHT = 360;
 
 void SWRenderApplication::on_device_created(const Vulkan::DeviceCreatedEvent& e)
 {
@@ -351,6 +351,8 @@ bool SWRenderApplication::on_key_pressed(const KeyboardEvent &e)
 		queue_dump_frame = true;
 	else if (e.get_key_state() == KeyState::Pressed && e.get_key() == Key::U)
 		update_setup_cache = !update_setup_cache;
+	else if (e.get_key_state() == KeyState::Pressed && e.get_key() == Key::Space)
+		get_wsi().set_present_mode(get_wsi().get_present_mode() == Vulkan::PresentMode::SyncToVBlank ? Vulkan::PresentMode::Unlocked : Vulkan::PresentMode::SyncToVBlank);
 	return true;
 }
 
@@ -369,7 +371,7 @@ static void transform_vertex(Vertex &out_vertex, const Vertex &in_vertex, const 
 	memcpy(out_vertex.clip, clip.data, 4 * sizeof(float));
 }
 
-void SWRenderApplication::render_frame(double, double)
+void SWRenderApplication::render_frame(double frame_time, double)
 {
 	auto &device = get_wsi().get_device();
 	auto &scene = loader.get_scene();
@@ -481,6 +483,8 @@ void SWRenderApplication::render_frame(double, double)
 	if (queue_dump_frame)
 		end_dump_frame();
 	queue_dump_frame = false;
+
+	LOGI("Frame time: %.3f ms\n", 1000.0 * frame_time);
 }
 
 namespace Granite
