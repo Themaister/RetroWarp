@@ -252,8 +252,8 @@ struct SWRenderApplication : Application, EventHandler
 	bool update_setup_cache = true;
 };
 
-constexpr unsigned WIDTH = 640;
-constexpr unsigned HEIGHT = 360;
+constexpr unsigned WIDTH = 1920;
+constexpr unsigned HEIGHT = 1080;
 
 void SWRenderApplication::on_device_created(const Vulkan::DeviceCreatedEvent& e)
 {

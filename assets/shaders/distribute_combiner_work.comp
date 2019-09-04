@@ -2,8 +2,8 @@
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_8bit_storage : require
 
-#undef SUBGROUP
-#define SUBGROUP 0
+//#undef SUBGROUP
+//#define SUBGROUP 0
 
 #if SUBGROUP
 #extension GL_KHR_shader_subgroup_ballot : require
@@ -54,7 +54,9 @@ layout(std430, set = 0, binding = 5) readonly buffer StateIndex
 uint allocate_work_offset(uint variant_index)
 {
     // Merge atomic operations.
-    for (;;)
+    bool work_to_do = true;
+    uint res;
+    do
     {
         if (subgroupBroadcastFirst(variant_index) == variant_index)
         {
@@ -66,9 +68,11 @@ uint allocate_work_offset(uint variant_index)
 
             work_offset = subgroupBroadcastFirst(work_offset);
             work_offset += subgroupBallotExclusiveBitCount(active_mask);
-            return work_offset;
+            res = work_offset;
+            work_to_do = false;
         }
-    }
+    } while(work_to_do);
+    return res;
 }
 #endif
 
