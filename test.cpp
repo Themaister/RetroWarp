@@ -222,7 +222,7 @@ static void create_software_renderable(Entity *entity, RenderableComponent *rend
 
 struct SWRenderApplication : Application, EventHandler
 {
-	explicit SWRenderApplication(const std::string &path, bool subgroup, bool ubershader);
+	explicit SWRenderApplication(const std::string &path, bool subgroup, bool ubershader, bool async_compute);
 	void render_frame(double, double) override;
 
 	SceneLoader loader;
@@ -253,6 +253,7 @@ struct SWRenderApplication : Application, EventHandler
 	bool update_setup_cache = true;
 	bool subgroup;
 	bool ubershader;
+	bool async_compute;
 };
 
 constexpr unsigned WIDTH = 1920;
@@ -260,7 +261,7 @@ constexpr unsigned HEIGHT = 1080;
 
 void SWRenderApplication::on_device_created(const Vulkan::DeviceCreatedEvent& e)
 {
-	rasterizer_gpu.init(e.get_device(), subgroup, ubershader);
+	rasterizer_gpu.init(e.get_device(), subgroup, ubershader, async_compute);
 	rasterizer_gpu.resize(WIDTH, HEIGHT);
 }
 
@@ -322,8 +323,8 @@ void SWRenderApplication::end_dump_frame()
 	dump_file = nullptr;
 }
 
-SWRenderApplication::SWRenderApplication(const std::string &path, bool subgroup_, bool ubershader_)
-	: subgroup(subgroup_), ubershader(ubershader_)
+SWRenderApplication::SWRenderApplication(const std::string &path, bool subgroup_, bool ubershader_, bool async_compute_)
+	: subgroup(subgroup_), ubershader(ubershader_), async_compute(async_compute_)
 {
 	loader.load_scene(path);
 
@@ -480,11 +481,13 @@ Application *application_create(int argc, char **argv)
 {
 	bool ubershader = false;
 	bool subgroup = true;
+	bool async_compute = false;
 	std::string path;
 
 	Util::CLICallbacks cbs;
 	cbs.add("--ubershader", [&](Util::CLIParser &) { ubershader = true; });
 	cbs.add("--nosubgroup", [&](Util::CLIParser &) { subgroup = false; });
+	cbs.add("--async-compute", [&](Util::CLIParser &) { async_compute = true; });
 	cbs.default_handler = [&](const char *arg) { path = arg; };
 	Util::CLIParser parser(std::move(cbs), argc - 1, argv + 1);
 
@@ -495,6 +498,6 @@ Application *application_create(int argc, char **argv)
 	}
 
 	Global::filesystem()->register_protocol("assets", std::make_unique<OSFilesystem>(ASSET_DIRECTORY));
-	return new SWRenderApplication(path, subgroup, ubershader);
+	return new SWRenderApplication(path, subgroup, ubershader, async_compute);
 }
 }

@@ -27,6 +27,7 @@ struct RasterizerGPU::Impl
 	unsigned height = 0;
 	bool subgroup = false;
 	bool ubershader = false;
+	bool async_compute = false;
 	unsigned num_state_indices = 0;
 
 	struct
@@ -90,7 +91,7 @@ struct RasterizerGPU::Impl
 		const ImageView *current_image = nullptr;
 	} state;
 
-	void init(Device &device, bool subgroup, bool ubershader);
+	void init(Device &device, bool subgroup, bool ubershader, bool async_compute);
 
 	void reset_staging();
 	void begin_staging();
@@ -302,7 +303,7 @@ void RasterizerGPU::Impl::end_staging()
 		cmd->copy_buffer(*staging.state_index_gpu, 0, *staging.state_index, 0, staging.count * sizeof(uint8_t));
 		Semaphore sem;
 		device->submit(cmd, nullptr, 1, &sem);
-		device->add_wait_semaphore(CommandBuffer::Type::AsyncCompute, sem, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, true);
+		device->add_wait_semaphore(async_compute ? CommandBuffer::Type::AsyncCompute : CommandBuffer::Type::Generic, sem, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, true);
 	}
 }
 
@@ -584,7 +585,9 @@ void RasterizerGPU::Impl::flush_ubershader()
 	if (staging.count == 0)
 		return;
 
-	auto cmd = device->request_command_buffer(CommandBuffer::Type::AsyncCompute);
+	auto queue_type = async_compute ? CommandBuffer::Type::AsyncCompute : CommandBuffer::Type::Generic;
+
+	auto cmd = device->request_command_buffer(queue_type);
 
 	set_fb_info(*cmd);
 
@@ -601,11 +604,11 @@ void RasterizerGPU::Impl::flush_ubershader()
 	auto &rop_sem = tile_instance_data.rop_complete[tile_instance_data.index];
 	if (rop_sem)
 	{
-		device->add_wait_semaphore(CommandBuffer::Type::AsyncCompute, rop_sem, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, true);
+		device->add_wait_semaphore(queue_type, rop_sem, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, true);
 		rop_sem.reset();
 	}
 
-	cmd = device->request_command_buffer(CommandBuffer::Type::AsyncCompute);
+	cmd = device->request_command_buffer(queue_type);
 	set_fb_info(*cmd);
 
 	t1 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
@@ -649,7 +652,9 @@ void RasterizerGPU::Impl::flush_split()
 	if (staging.count == 0)
 		return;
 
-	auto cmd = device->request_command_buffer(CommandBuffer::Type::AsyncCompute);
+	auto queue_type = async_compute ? CommandBuffer::Type::AsyncCompute : CommandBuffer::Type::Generic;
+
+	auto cmd = device->request_command_buffer(queue_type);
 
 	set_fb_info(*cmd);
 
@@ -673,13 +678,13 @@ void RasterizerGPU::Impl::flush_split()
 	auto &rop_sem = tile_instance_data.rop_complete[tile_instance_data.index];
 	if (rop_sem)
 	{
-		device->add_wait_semaphore(CommandBuffer::Type::AsyncCompute,
+		device->add_wait_semaphore(queue_type,
 			rop_sem,
 			VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, true);
 		rop_sem.reset();
 	}
 
-	cmd = device->request_command_buffer(CommandBuffer::Type::AsyncCompute);
+	cmd = device->request_command_buffer(queue_type);
 	set_fb_info(*cmd);
 
 	t1 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
@@ -827,11 +832,12 @@ static std::vector<T> readback_buffer(Device *device, const Buffer &buffer)
 	return result;
 }
 
-void RasterizerGPU::Impl::init(Device &device_, bool subgroup_, bool ubershader_)
+void RasterizerGPU::Impl::init(Device &device_, bool subgroup_, bool ubershader_, bool async_compute_)
 {
 	device = &device_;
 	subgroup = subgroup_;
 	ubershader = ubershader_;
+	async_compute = async_compute_;
 	num_state_indices = ubershader ? 16 : 64;
 
 	auto &features = device->get_device_features();
@@ -1081,9 +1087,9 @@ bool RasterizerGPU::save_canvas(const char *path)
 	return res;
 }
 
-void RasterizerGPU::init(Device &device, bool subgroup, bool ubershader)
+void RasterizerGPU::init(Device &device, bool subgroup, bool ubershader, bool async_compute)
 {
-	impl->init(device, subgroup, ubershader);
+	impl->init(device, subgroup, ubershader, async_compute);
 }
 
 void RasterizerGPU::flush()

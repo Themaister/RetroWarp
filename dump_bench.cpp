@@ -125,11 +125,13 @@ int main(int argc, char **argv)
 {
 	bool ubershader = false;
 	bool subgroup = true;
+	bool async_compute = false;
 	std::string path;
 
 	Util::CLICallbacks cbs;
 	cbs.add("--ubershader", [&](Util::CLIParser &) { ubershader = true; });
 	cbs.add("--nosubgroup", [&](Util::CLIParser &) { subgroup = false; });
+	cbs.add("--async-compute", [&](Util::CLIParser &) { async_compute = true; });
 	cbs.default_handler = [&](const char *arg) { path = arg; };
 	Util::CLIParser parser(std::move(cbs), argc - 1, argv + 1);
 
@@ -245,7 +247,7 @@ int main(int argc, char **argv)
 	}
 
 	RasterizerGPU rasterizer;
-	rasterizer.init(device, subgroup, ubershader);
+	rasterizer.init(device, subgroup, ubershader, async_compute);
 	rasterizer.resize(width, height);
 
 	auto start_run = Util::get_current_time_nsecs();

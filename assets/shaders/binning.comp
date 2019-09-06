@@ -136,12 +136,13 @@ void main()
 #if !UBERSHADER
     uint bit_count = uint(bitCount(binned));
     uint total_bit_count = subgroupAdd(bit_count);
-    uint instance_offset;
+    uint instance_offset = 0u;
 #endif
     if (subgroupElect())
     {
 #if !UBERSHADER
-        instance_offset = atomicAdd(item_counts_per_variant[0].w, total_bit_count);
+        if (total_bit_count != 0u)
+            instance_offset = atomicAdd(item_counts_per_variant[0].w, total_bit_count);
 #endif
         uint binned_bitmask_offset = uint(TILE_BINNING_STRIDE_COARSE * linear_tile);
         if (gl_SubgroupSize == 64u)
@@ -177,12 +178,15 @@ void main()
 
 #if !UBERSHADER
     uint bit_count = uint(bitCount(binned));
-    uint instance_offset = atomicAdd(item_counts_per_variant[0].w, bit_count);
+    uint instance_offset = 0u;
+    if (bit_count != 0u)
+        instance_offset = atomicAdd(item_counts_per_variant[0].w, bit_count);
 #endif
 #endif
 
 #if !UBERSHADER
-    tile_instance_offset[linear_tile * TILE_BINNING_STRIDE + mask_index] = uint16_t(instance_offset);
+    if (bit_count != 0u)
+        tile_instance_offset[linear_tile * TILE_BINNING_STRIDE + mask_index] = uint16_t(instance_offset);
 
     while (binned != 0u)
     {
