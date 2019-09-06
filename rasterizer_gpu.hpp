@@ -12,7 +12,6 @@ namespace RetroWarp
 class RasterizerGPU
 {
 public:
-	enum { NUM_STATE_INDICES = 64 };
 	RasterizerGPU();
 	~RasterizerGPU();
 
@@ -23,9 +22,8 @@ public:
 	void clear_color(uint32_t rgba = 0);
 	bool save_canvas(const char *path);
 
-	void set_state_index(unsigned state_index);
 	void rasterize_primitives(const PrimitiveSetup *setup, size_t count);
-	void set_texture(unsigned state_index, const Vulkan::ImageView &view);
+	void set_texture(const Vulkan::ImageView &view);
 
 	float get_binning_ratio(size_t count);
 	Vulkan::ImageHandle copy_to_framebuffer();

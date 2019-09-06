@@ -443,29 +443,12 @@ void SWRenderApplication::render_frame(double frame_time, double)
 	else
 		LOGI("Cached %u primitive setups!\n", unsigned(setup_cache.size()));
 
-	unsigned current_state[RasterizerGPU::NUM_STATE_INDICES];
-	for (auto &state : current_state)
-		state = ~0u;
-
 	for (auto &setup : setup_cache)
 	{
-		unsigned masked_state_index = setup.index & (RasterizerGPU::NUM_STATE_INDICES - 1);
-		if (current_state[masked_state_index] != ~0u &&
-		    current_state[masked_state_index] != setup.index)
-		{
-			rasterizer_gpu.flush();
-			for (auto &state : current_state)
-				state = ~0u;
-		}
-
 		if (queue_dump_frame)
 			dump_set_texture(setup.index);
 
-		current_state[masked_state_index] = setup.index;
-
-		rasterizer_gpu.set_state_index(masked_state_index);
-		rasterizer_gpu.set_texture(masked_state_index, *setup.view);
-
+		rasterizer_gpu.set_texture(*setup.view);
 		rasterizer_gpu.rasterize_primitives(&setup.setup, 1);
 		if (queue_dump_frame)
 			dump_primitives(&setup.setup, 1);

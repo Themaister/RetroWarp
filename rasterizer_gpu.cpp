@@ -18,6 +18,7 @@ struct BBox
 
 constexpr bool ENABLE_SUBGROUP = true;
 constexpr bool ENABLE_UBERSHADER = false;
+constexpr unsigned NUM_STATE_INDICES = ENABLE_UBERSHADER ? 16 : 64;
 
 struct RasterizerGPU::Impl
 {
@@ -84,8 +85,8 @@ struct RasterizerGPU::Impl
 	struct
 	{
 		const ImageView *image_views[NUM_STATE_INDICES] = {};
-		unsigned current_state_index = 0;
-		bool active_state_indices[NUM_STATE_INDICES] = {};
+		unsigned state_count = 0;
+		const ImageView *current_image = nullptr;
 	} state;
 
 	void init(Device &device);
@@ -448,55 +449,47 @@ void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 	cmd.set_storage_buffer(0, 4, *staging.positions_gpu);
 	cmd.set_storage_buffer(0, 5, *staging.attributes_gpu);
 
-	for (unsigned variant = 0; variant < NUM_STATE_INDICES; variant++)
-	{
-		if (!state.active_state_indices[variant])
-			continue;
+	auto &features = device->get_device_features();
+	uint32_t subgroup_size = features.subgroup_properties.subgroupSize;
+	const VkSubgroupFeatureFlags required = VK_SUBGROUP_FEATURE_BASIC_BIT |
+	                                        VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
+	                                        VK_SUBGROUP_FEATURE_BALLOT_BIT;
 
+	if (features.compute_shader_derivative_features.computeDerivativeGroupQuads)
+	{
+		cmd.set_program("assets://shaders/combiner.comp", { {"DERIVATIVE_GROUP_QUAD", 1}, {"SUBGROUP", 0} });
+	}
+	else if (features.compute_shader_derivative_features.computeDerivativeGroupLinear)
+	{
+		cmd.set_program("assets://shaders/combiner.comp", { {"DERIVATIVE_GROUP_LINEAR", 1}, {"SUBGROUP", 0} });
+	}
+	else if (ENABLE_SUBGROUP && (features.subgroup_properties.supportedOperations & required) == required &&
+	         (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
+	         can_support_minimum_subgroup_size(4))
+	{
+		cmd.set_program("assets://shaders/combiner.comp", { {"SUBGROUP", 1} });
+		if (supports_subgroup_size_control())
+		{
+			cmd.set_subgroup_size_log2(true, 2, 7);
+			cmd.enable_subgroup_size_control(true);
+		}
+	}
+	else
+	{
+		cmd.set_program("assets://shaders/combiner.comp", { {"SUBGROUP", 0} });
+	}
+
+	for (unsigned variant = 0; variant < state.state_count; variant++)
+	{
 		cmd.set_storage_buffer(0, 0, *raster_work.work_list_per_variant,
 		                       variant * (MAX_NUM_TILE_INSTANCES + 1) * sizeof(TileRasterWork),
 		                       (MAX_NUM_TILE_INSTANCES + 1) * sizeof(TileRasterWork));
 		assert(state.image_views[variant]);
 		cmd.set_texture(1, 0, *state.image_views[variant], StockSampler::TrilinearWrap);
-
-		auto &features = device->get_device_features();
-		uint32_t subgroup_size = features.subgroup_properties.subgroupSize;
-		const VkSubgroupFeatureFlags required = VK_SUBGROUP_FEATURE_BASIC_BIT |
-		                                        VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
-		                                        VK_SUBGROUP_FEATURE_BALLOT_BIT;
-
-		if (features.compute_shader_derivative_features.computeDerivativeGroupQuads)
-		{
-			cmd.set_program("assets://shaders/combiner.comp", {{"DERIVATIVE_GROUP_QUAD", 1}, {"SUBGROUP", 0}});
-			cmd.dispatch_indirect(*raster_work.item_count_per_variant, 16 * variant);
-		}
-		else if (features.compute_shader_derivative_features.computeDerivativeGroupLinear)
-		{
-			cmd.set_program("assets://shaders/combiner.comp", {{"DERIVATIVE_GROUP_LINEAR", 1}, {"SUBGROUP", 0}});
-			cmd.dispatch_indirect(*raster_work.item_count_per_variant, 16 * variant);
-		}
-		else if (ENABLE_SUBGROUP && (features.subgroup_properties.supportedOperations & required) == required &&
-		         (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
-		         can_support_minimum_subgroup_size(4))
-		{
-			cmd.set_program("assets://shaders/combiner.comp", {{"SUBGROUP", 1}});
-
-			if (supports_subgroup_size_control())
-			{
-				cmd.set_subgroup_size_log2(true, 2, 7);
-				cmd.enable_subgroup_size_control(true);
-			}
-
-			cmd.dispatch_indirect(*raster_work.item_count_per_variant, 16 * variant);
-			cmd.enable_subgroup_size_control(false);
-		}
-		else
-		{
-			cmd.set_program("assets://shaders/combiner.comp", {{"SUBGROUP", 0}});
-			cmd.dispatch_indirect(*raster_work.item_count_per_variant, 16 * variant);
-		}
+		cmd.dispatch_indirect(*raster_work.item_count_per_variant, 16 * variant);
 	}
 	cmd.end_region();
+	cmd.enable_subgroup_size_control(false);
 }
 
 void RasterizerGPU::Impl::set_fb_info(CommandBuffer &cmd)
@@ -531,7 +524,7 @@ void RasterizerGPU::Impl::run_rop_ubershader(CommandBuffer &cmd)
 
 	for (unsigned i = 0; i < NUM_STATE_INDICES; i++)
 	{
-		cmd.set_texture(1, i, state.active_state_indices[i] ? *state.image_views[i] : *state.image_views[0],
+		cmd.set_texture(1, i, i < state.state_count ? *state.image_views[i] : *state.image_views[0],
 		                StockSampler::TrilinearWrap);
 	}
 
@@ -588,10 +581,7 @@ void RasterizerGPU::Impl::flush_ubershader()
 {
 	end_staging();
 	if (staging.count == 0)
-	{
-		memset(state.active_state_indices, 0, sizeof(state.active_state_indices));
 		return;
-	}
 
 	auto cmd = device->request_command_buffer(CommandBuffer::Type::AsyncCompute);
 
@@ -648,7 +638,6 @@ void RasterizerGPU::Impl::flush_ubershader()
 	tile_instance_data.rop_complete[tile_instance_data.index] = sem;
 	reset_staging();
 
-	memset(state.active_state_indices, 0, sizeof(state.active_state_indices));
 	device->register_time_interval(t0, t3, "iteration");
 	tile_instance_data.index ^= 1;
 }
@@ -657,10 +646,7 @@ void RasterizerGPU::Impl::flush_split()
 {
 	end_staging();
 	if (staging.count == 0)
-	{
-		memset(state.active_state_indices, 0, sizeof(state.active_state_indices));
 		return;
-	}
 
 	auto cmd = device->request_command_buffer(CommandBuffer::Type::AsyncCompute);
 
@@ -740,7 +726,6 @@ void RasterizerGPU::Impl::flush_split()
 
 	reset_staging();
 
-	memset(state.active_state_indices, 0, sizeof(state.active_state_indices));
 	tile_instance_data.index ^= 1;
 }
 
@@ -866,14 +851,9 @@ RasterizerGPU::~RasterizerGPU()
 {
 }
 
-void RasterizerGPU::set_texture(unsigned state_index, const ImageView &view)
+void RasterizerGPU::set_texture(const ImageView &view)
 {
-	impl->state.image_views[state_index] = &view;
-}
-
-void RasterizerGPU::set_state_index(unsigned state_index)
-{
-	impl->state.current_state_index = state_index;
+	impl->state.current_image = &view;
 }
 
 void RasterizerGPU::resize(unsigned width, unsigned height)
@@ -939,10 +919,34 @@ void RasterizerGPU::Impl::queue_primitive(const PrimitiveSetup &setup)
 	if (staging.count == 0)
 		begin_staging();
 
-	state.active_state_indices[state.current_state_index] = true;
+	unsigned current_state;
+
+	if (state.state_count == 0)
+	{
+		state.image_views[0] = state.current_image;
+		state.state_count++;
+		current_state = 0;
+	}
+	else if (state.current_image != state.image_views[state.state_count - 1] && state.state_count == NUM_STATE_INDICES)
+	{
+		flush();
+		begin_staging();
+		state.image_views[0] = state.current_image;
+		state.state_count++;
+		current_state = 0;
+	}
+	else if (state.current_image != state.image_views[state.state_count - 1])
+	{
+		state.image_views[state.state_count] = state.current_image;
+		current_state = state.state_count;
+		state.state_count++;
+	}
+	else
+		current_state = state.state_count - 1;
+
 	staging.mapped_positions[staging.count] = setup.pos;
 	staging.mapped_attributes[staging.count] = setup.attr;
-	staging.mapped_state_index[staging.count] = state.current_state_index;
+	staging.mapped_state_index[staging.count] = current_state;
 
 	staging.count++;
 	staging.num_conservative_tile_instances += num_conservative_tiles;
@@ -1089,6 +1093,8 @@ void RasterizerGPU::Impl::flush()
 		flush_ubershader();
 	else
 		flush_split();
+
+	state.state_count = 0;
 }
 
 }

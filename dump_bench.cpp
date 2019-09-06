@@ -237,30 +237,16 @@ int main(int argc, char **argv)
 	rasterizer.init(device);
 	rasterizer.resize(width, height);
 
-	unsigned current_state[RasterizerGPU::NUM_STATE_INDICES];
 
 	auto start_run = Util::get_current_time_nsecs();
 	for (unsigned i = 0; i < 1000; i++)
 	{
-		for (unsigned j = 0; j < RasterizerGPU::NUM_STATE_INDICES; j++)
-			current_state[j] = ~0u;
-
 		device.next_frame_context();
 		rasterizer.clear_depth();
 		rasterizer.clear_color();
 		for (auto &command : commands)
 		{
-			unsigned masked_state_index = command.first & (RasterizerGPU::NUM_STATE_INDICES - 1);
-			if (current_state[masked_state_index] != ~0u &&
-			    current_state[masked_state_index] != command.first)
-			{
-				rasterizer.flush();
-			}
-
-			current_state[masked_state_index] = command.first;
-
-			rasterizer.set_state_index(masked_state_index);
-			rasterizer.set_texture(masked_state_index, textures[command.first]->get_view());
+			rasterizer.set_texture(textures[command.first]->get_view());
 			rasterizer.rasterize_primitives(&command.second, 1);
 		}
 		rasterizer.flush();
