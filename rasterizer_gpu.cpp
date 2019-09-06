@@ -41,16 +41,6 @@ struct RasterizerGPU::Impl
 
 	struct
 	{
-		// Prefix sum of primitives active inside a tile.
-		BufferHandle tile_prefix_sum[2];
-		// Total primitives for a tile.
-		BufferHandle tile_total;
-		// Horizontal prefix sum of tile_total.
-		BufferHandle horiz_prefix_sum;
-		// Totals for horizontal scan.
-		BufferHandle horiz_total;
-		// Vertical scan of horiz_total.
-		BufferHandle vert_prefix_sum;
 		// Final resolved tile offsets.
 		BufferHandle tile_offset[2];
 	} tile_count;
@@ -122,11 +112,6 @@ struct RasterizerGPU::Impl
 	void clear_indirect_buffer(CommandBuffer &cmd);
 	void binning_low_res_prepass(CommandBuffer &cmd);
 	void binning_full_res(CommandBuffer &cmd);
-	void run_per_tile_prefix_sum(CommandBuffer &cmd);
-	void run_horiz_prefix_sum(CommandBuffer &cmd);
-	void run_vert_prefix_sum(CommandBuffer &cmd);
-	void finalize_tile_offsets(CommandBuffer &cmd);
-	void distribute_combiner_work(CommandBuffer &cmd);
 	void dispatch_combiner_work(CommandBuffer &cmd);
 	void run_rop(CommandBuffer &cmd);
 	void run_rop_ubershader(CommandBuffer &cmd);
@@ -376,13 +361,20 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd)
 	cmd.set_storage_buffer(0, 1, *staging.positions_gpu);
 	cmd.set_storage_buffer(0, 2, *binning.mask_buffer_low_res);
 	cmd.set_storage_buffer(0, 3, *binning.mask_buffer_coarse[tile_instance_data.index]);
+	cmd.set_storage_buffer(0, 4, *tile_count.tile_offset[tile_instance_data.index]);
+	cmd.set_storage_buffer(0, 5, *raster_work.item_count_per_variant);
+	cmd.set_storage_buffer(0, 6, *raster_work.work_list_per_variant);
+	cmd.set_storage_buffer(0, 7, *staging.state_index_gpu);
 
 	auto &features = device->get_device_features();
 	uint32_t subgroup_size = features.subgroup_properties.subgroupSize;
 
 	uint32_t num_masks = (staging.count + 31) / 32;
 
-	const VkSubgroupFeatureFlags required = VK_SUBGROUP_FEATURE_BALLOT_BIT | VK_SUBGROUP_FEATURE_BASIC_BIT;
+	const VkSubgroupFeatureFlags required = VK_SUBGROUP_FEATURE_BALLOT_BIT |
+	                                        VK_SUBGROUP_FEATURE_BASIC_BIT |
+	                                        VK_SUBGROUP_FEATURE_ARITHMETIC_BIT;
+
 	if (ENABLE_SUBGROUP && (features.subgroup_properties.supportedOperations & required) == required &&
 	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
 	    can_support_minimum_subgroup_size(subgroup_size) && subgroup_size <= 64)
@@ -410,114 +402,6 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd)
 		cmd.dispatch((num_masks + 31) / 32,
 		             (width + TILE_WIDTH - 1) / TILE_WIDTH,
 		             (height + TILE_HEIGHT - 1) / TILE_HEIGHT);
-	}
-
-	cmd.end_region();
-}
-
-void RasterizerGPU::Impl::run_per_tile_prefix_sum(CommandBuffer &cmd)
-{
-	cmd.begin_region("run-per-tile-prefix-sum");
-
-	cmd.set_storage_buffer(0, 0, *binning.mask_buffer[tile_instance_data.index]);
-	cmd.set_storage_buffer(0, 1, *tile_count.tile_prefix_sum[tile_instance_data.index]);
-	cmd.set_storage_buffer(0, 2, *tile_count.tile_total);
-
-	unsigned tiles_x = (width + TILE_WIDTH - 1) / TILE_WIDTH;
-	unsigned tiles_y = (height + TILE_HEIGHT - 1) / TILE_HEIGHT;
-
-	auto &features = device->get_device_features();
-	uint32_t subgroup_size = features.subgroup_properties.subgroupSize;
-	const VkSubgroupFeatureFlags required = VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
-	                                        VK_SUBGROUP_FEATURE_BASIC_BIT |
-	                                        VK_SUBGROUP_FEATURE_BALLOT_BIT;
-
-	if (ENABLE_SUBGROUP && (features.subgroup_properties.supportedOperations & required) == required &&
-	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
-	    can_support_minimum_subgroup_size(subgroup_size))
-	{
-		cmd.set_program("assets://shaders/tile_prefix_sum.comp", {{ "SUBGROUP", 1 }});
-		cmd.set_specialization_constant_mask(1);
-		cmd.set_specialization_constant(0, subgroup_size);
-
-		if (supports_subgroup_size_control())
-		{
-			cmd.set_subgroup_size_log2(true,
-			                           trailing_zeroes(subgroup_size),
-			                           trailing_zeroes(subgroup_size));
-			cmd.enable_subgroup_size_control(true);
-		}
-		cmd.dispatch(tiles_x, tiles_y, 1);
-		cmd.enable_subgroup_size_control(false);
-	}
-	else
-	{
-		cmd.set_program("assets://shaders/tile_prefix_sum.comp", {{ "SUBGROUP", 0 }});
-		cmd.dispatch(tiles_x, tiles_y, 1);
-	}
-	cmd.end_region();
-}
-
-void RasterizerGPU::Impl::run_horiz_prefix_sum(CommandBuffer &cmd)
-{
-	cmd.begin_region("run-horiz-prefix-sum");
-	cmd.set_program("assets://shaders/horiz_prefix_sum.comp");
-	cmd.set_storage_buffer(0, 0, *tile_count.tile_total);
-	cmd.set_storage_buffer(0, 1, *tile_count.horiz_prefix_sum);
-	cmd.set_storage_buffer(0, 2, *tile_count.horiz_total);
-	unsigned tiles_y = (height + TILE_HEIGHT - 1) / TILE_HEIGHT;
-	cmd.dispatch(1, tiles_y, 1);
-	cmd.end_region();
-}
-
-void RasterizerGPU::Impl::run_vert_prefix_sum(CommandBuffer &cmd)
-{
-	cmd.begin_region("run-vert-prefix-sum");
-	cmd.set_program("assets://shaders/vert_prefix_sum.comp");
-	cmd.set_storage_buffer(0, 0, *tile_count.horiz_total);
-	cmd.set_storage_buffer(0, 1, *tile_count.vert_prefix_sum);
-	cmd.dispatch(1, 1, 1);
-	cmd.end_region();
-}
-
-void RasterizerGPU::Impl::finalize_tile_offsets(CommandBuffer &cmd)
-{
-	cmd.begin_region("finalize-tile-offsets");
-	cmd.set_program("assets://shaders/finalize_tile_offsets.comp");
-	cmd.set_storage_buffer(0, 0, *tile_count.horiz_prefix_sum);
-	cmd.set_storage_buffer(0, 1, *tile_count.vert_prefix_sum);
-	cmd.set_storage_buffer(0, 2, *tile_count.tile_offset[tile_instance_data.index]);
-	cmd.dispatch(MAX_TILES_X / 8, MAX_TILES_Y / 8, 1);
-	cmd.end_region();
-}
-
-void RasterizerGPU::Impl::distribute_combiner_work(CommandBuffer &cmd)
-{
-	cmd.begin_region("distribute-combiner-work");
-	cmd.set_storage_buffer(0, 0, *tile_count.tile_offset[tile_instance_data.index]);
-	cmd.set_storage_buffer(0, 1, *tile_count.tile_prefix_sum[tile_instance_data.index]);
-	cmd.set_storage_buffer(0, 2, *binning.mask_buffer[tile_instance_data.index]);
-	cmd.set_storage_buffer(0, 3, *raster_work.item_count_per_variant);
-	cmd.set_storage_buffer(0, 4, *raster_work.work_list_per_variant);
-	cmd.set_storage_buffer(0, 5, *staging.state_index_gpu);
-
-	unsigned num_tiles_x = (width + TILE_WIDTH - 1) / TILE_WIDTH;
-	unsigned num_tiles_y = (height + TILE_HEIGHT - 1) / TILE_HEIGHT;
-
-	auto &features = device->get_device_features();
-	const VkSubgroupFeatureFlags required = VK_SUBGROUP_FEATURE_BASIC_BIT |
-	                                        VK_SUBGROUP_FEATURE_BALLOT_BIT;
-
-	if (ENABLE_SUBGROUP && (features.subgroup_properties.supportedOperations & required) == required &&
-	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0)
-	{
-		cmd.set_program("assets://shaders/distribute_combiner_work.comp", {{ "SUBGROUP", 1 }});
-		cmd.dispatch(num_tiles_x, num_tiles_y, 1);
-	}
-	else
-	{
-		cmd.set_program("assets://shaders/distribute_combiner_work.comp", {{ "SUBGROUP", 0 }});
-		cmd.dispatch(num_tiles_x, num_tiles_y, 1);
 	}
 
 	cmd.end_region();
@@ -696,7 +580,6 @@ void RasterizerGPU::Impl::run_rop(CommandBuffer &cmd)
 	cmd.set_storage_buffer(0, 5, *tile_instance_data.depth[tile_instance_data.index]);
 	cmd.set_storage_buffer(0, 6, *tile_instance_data.flags[tile_instance_data.index]);
 	cmd.set_storage_buffer(0, 7, *tile_count.tile_offset[tile_instance_data.index]);
-	cmd.set_storage_buffer(0, 8, *tile_count.tile_prefix_sum[tile_instance_data.index]);
 	cmd.dispatch((width + TILE_WIDTH - 1) / TILE_WIDTH, (height + TILE_HEIGHT - 1) / TILE_HEIGHT, 1);
 	cmd.end_region();
 }
@@ -818,63 +701,16 @@ void RasterizerGPU::Impl::flush_split()
 	binning_full_res(*cmd);
 
 	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
+	             VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT);
 
 	auto t2 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 	device->register_time_interval(t1, t2, "binning-full-res");
 
-	// Merge coarse mask.
-	// Run per-tile prefix sum.
-	run_per_tile_prefix_sum(*cmd);
-
-	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
-
-	auto t3 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-	device->register_time_interval(t2, t3, "per-tile-prefix-sum");
-
-	// Run horizontal prefix sum.
-	run_horiz_prefix_sum(*cmd);
-
-	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
-
-	auto t4 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-	device->register_time_interval(t3, t4, "horiz-prefix-sum");
-
-	// Run vertical prefix sum.
-	// This job is very small, so run coarse mask building in parallel to avoid starving GPU completely.
-	run_vert_prefix_sum(*cmd);
-
-	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
-
-	auto t5 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-	device->register_time_interval(t4, t5, "vert-prefix-sum");
-
-	// Finalize offsets per tile.
-	finalize_tile_offsets(*cmd);
-
-	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
-
-	auto t6 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-	device->register_time_interval(t5, t6, "finalize-tile-offsets");
-
-	// Distribute work.
-	distribute_combiner_work(*cmd);
-
-	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-	             VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-	             VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT);
-
-	auto t7 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-	device->register_time_interval(t6, t7, "distribute-combiner-work");
-
 	dispatch_combiner_work(*cmd);
 
-	auto t8 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-	device->register_time_interval(t7, t8, "dispatch-combiner-work");
+	auto t3 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+	device->register_time_interval(t2, t3, "dispatch-combiner-work");
 
 	// Hand off shaded result to ROP.
 	Semaphore sem;
@@ -883,7 +719,7 @@ void RasterizerGPU::Impl::flush_split()
 	cmd = device->request_command_buffer();
 	set_fb_info(*cmd);
 
-	t8 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+	t3 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 
 	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
 	             VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -893,10 +729,10 @@ void RasterizerGPU::Impl::flush_split()
 	// ROP.
 	run_rop(*cmd);
 
-	auto t9 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-	device->register_time_interval(t8, t9, "rop");
+	auto t4 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+	device->register_time_interval(t3, t4, "rop");
 
-	device->register_time_interval(t0, t9, "iteration");
+	device->register_time_interval(t0, t4, "iteration");
 
 	sem.reset();
 	device->submit(cmd, nullptr, 1, &sem);
@@ -937,18 +773,8 @@ void RasterizerGPU::Impl::init_prefix_sum_buffers()
 	             VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 
 	info.size = MAX_TILES_X * MAX_TILES_Y * TILE_BINNING_STRIDE * sizeof(uint16_t);
-	for (auto &count : tile_count.tile_prefix_sum)
-		count = device->create_buffer(info);
-
-	info.size = MAX_TILES_X * MAX_TILES_Y * sizeof(uint16_t);
-	tile_count.tile_total = device->create_buffer(info);
-	tile_count.horiz_prefix_sum = device->create_buffer(info);
-	for (auto &count : tile_count.tile_offset)
-		count = device->create_buffer(info);
-
-	info.size = MAX_TILES_Y * sizeof(uint16_t);
-	tile_count.horiz_total = device->create_buffer(info);
-	tile_count.vert_prefix_sum = device->create_buffer(info);
+	for (auto &offset : tile_count.tile_offset)
+		offset = device->create_buffer(info);
 }
 
 void RasterizerGPU::Impl::init_tile_buffers()

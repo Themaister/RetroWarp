@@ -62,11 +62,6 @@ layout(std430, set = 0, binding = 7) readonly buffer TileOffsets
     uint16_t tile_offsets[];
 };
 
-layout(std430, set = 0, binding = 8) readonly buffer TilePrefixSum
-{
-    uint16_t tile_prefix_sum[];
-};
-
 void main()
 {
     uvec2 coord = gl_GlobalInvocationID.xy;
@@ -85,7 +80,6 @@ void main()
 
     int primitive_mask_count = fb_info.primitive_count_32;
     int primitive_coarse_mask_count = fb_info.primitive_count_1024;
-    uint tile_instance_base_offset = uint(tile_offsets[linear_tile]);
 
     for (int coarse_mask_index = 0; coarse_mask_index < primitive_coarse_mask_count; coarse_mask_index++)
     {
@@ -96,7 +90,7 @@ void main()
             coarse_binned &= ~uint(1 << mask_index);
             mask_index += coarse_mask_index * 32;
             uint binned = binning_bitmask[linear_tile_base + mask_index];
-            uint tile_instance = uint(tile_prefix_sum[linear_tile_base + mask_index]) + tile_instance_base_offset;
+            uint tile_instance = uint(tile_offsets[linear_tile_base + mask_index]);
 
             while (binned != 0u)
             {

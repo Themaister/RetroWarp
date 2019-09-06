@@ -5,6 +5,7 @@
 #if SUBGROUP
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_ballot : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
 layout(local_size_x_id = 0) in;
 #else
 layout(local_size_x = 32) in;
@@ -28,8 +29,65 @@ layout(std430, set = 0, binding = 3) writeonly buffer TileBitmaskCoarse
     uint binned_bitmask_coarse[];
 };
 
+layout(std430, set = 0, binding = 4) writeonly buffer TileInstanceOffset
+{
+    uint16_t tile_instance_offset[];
+};
+
+layout(std430, set = 0, binding = 5) buffer IndirectBuffer
+{
+    uvec4 item_counts_per_variant[];
+};
+
+struct TileRasterWork
+{
+    uint16_t tile_x, tile_y;
+    uint16_t tile_instance;
+    uint16_t primitive;
+};
+
+layout(std430, set = 0, binding = 6) writeonly buffer WorkList
+{
+    u16vec4 tile_raster_work[];
+};
+
+layout(std430, set = 0, binding = 7) readonly buffer StateIndex
+{
+    uint8_t state_indices[];
+};
+
 #if !SUBGROUP
 shared uint merged_mask;
+#endif
+
+#if SUBGROUP
+uint allocate_work_offset(uint variant_index)
+{
+#if 0
+    return atomicAdd(item_counts_per_variant[variant_index].x, 1u);
+#else
+    // Merge atomic operations.
+    bool work_to_do = true;
+    uint res;
+    do
+    {
+        if (subgroupBroadcastFirst(variant_index) == variant_index)
+        {
+            uvec4 active_mask = subgroupBallot(true);
+            uint count = subgroupBallotBitCount(active_mask);
+            uint work_offset = 0u;
+            if (subgroupElect())
+            work_offset = atomicAdd(item_counts_per_variant[variant_index].x, count);
+
+            work_offset = subgroupBroadcastFirst(work_offset);
+            work_offset += subgroupBallotExclusiveBitCount(active_mask);
+            res = work_offset;
+            work_to_do = false;
+        }
+    } while(work_to_do);
+    return res;
+#endif
+}
 #endif
 
 void main()
@@ -38,22 +96,23 @@ void main()
     ivec2 base_coord = tile * ivec2(TILE_WIDTH, TILE_HEIGHT);
     ivec2 end_coord = min(base_coord + ivec2(TILE_WIDTH, TILE_HEIGHT), ivec2(fb_info.resolution));
 
-    int mask_index = int(gl_GlobalInvocationID.x);
     int linear_tile = tile.y * MAX_TILES_X + tile.x;
 #if SUBGROUP
     uint local_index = gl_SubgroupInvocationID;
+    int mask_index = int(gl_SubgroupInvocationID + gl_SubgroupID * gl_SubgroupSize + gl_WorkGroupID.x * gl_WorkGroupSize.x);
 #else
     uint local_index = gl_LocalInvocationIndex;
+    int mask_index = int(gl_GlobalInvocationID.x);
 #endif
 
     bool group_bin_to_tile = false;
+    uint binned = 0u;
     if (mask_index < fb_info.primitive_count_32)
     {
         int linear_tile_lowres = (tile.y >> 2) * MAX_TILES_X_LOW_RES + (tile.x >> 2);
         int binned_bitmask_offset = linear_tile_lowres * TILE_BINNING_STRIDE + mask_index;
 
         uint low_res_binned = binned_bitmask_low_res[binned_bitmask_offset];
-        uint binned = 0u;
         while (low_res_binned != 0u)
         {
             int i = findLSB(low_res_binned);
@@ -70,8 +129,12 @@ void main()
 
 #if SUBGROUP
     uvec4 ballot_result = subgroupBallot(group_bin_to_tile);
+    uint bit_count = uint(bitCount(binned));
+    uint total_bit_count = subgroupAdd(bit_count);
+    uint instance_offset;
     if (subgroupElect())
     {
+        instance_offset = atomicAdd(item_counts_per_variant[0].w, total_bit_count);
         uint binned_bitmask_offset = uint(TILE_BINNING_STRIDE_COARSE * linear_tile);
         if (gl_SubgroupSize == 64u)
         {
@@ -83,6 +146,9 @@ void main()
             binned_bitmask_coarse[binned_bitmask_offset + gl_WorkGroupID.x] = ballot_result.x;
         }
     }
+
+    instance_offset = subgroupBroadcastFirst(instance_offset);
+    instance_offset += subgroupInclusiveAdd(bit_count) - bit_count;
 #else
     if (local_index == 0u)
         merged_mask = 0u;
@@ -98,5 +164,22 @@ void main()
         uint binned_bitmask_offset = uint(TILE_BINNING_STRIDE_COARSE * linear_tile);
         binned_bitmask_coarse[binned_bitmask_offset + gl_WorkGroupID.x] = merged_mask;
     }
+
+    uint bit_count = uint(bitCount(binned));
+    uint instance_offset = atomicAdd(item_counts_per_variant[0].w, bit_count);
 #endif
+    tile_instance_offset[linear_tile * TILE_BINNING_STRIDE + mask_index] = uint16_t(instance_offset);
+
+    while (binned != 0u)
+    {
+        int i = findLSB(binned);
+        binned &= ~uint(1 << i);
+        int primitive_index = i + mask_index * 32;
+        uint variant_index = uint(state_indices[primitive_index]);
+
+        uint work_offset = atomicAdd(item_counts_per_variant[variant_index].x, 1u);
+        tile_raster_work[work_offset + uint(TILE_INSTANCE_STRIDE) * variant_index] =
+            u16vec4(uvec4(tile.x, tile.y, instance_offset, primitive_index));
+        instance_offset++;
+    }
 }
