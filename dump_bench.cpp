@@ -19,6 +19,7 @@
 #include "scene_loader.hpp"
 #include "mesh_util.hpp"
 #include "application.hpp"
+#include "cli_parser.hpp"
 
 using namespace RetroWarp;
 using namespace Granite;
@@ -122,9 +123,19 @@ bool StreamReader::parse_primitive(PrimitiveSetup &setup)
 
 int main(int argc, char **argv)
 {
-	if (argc != 2)
+	bool ubershader = false;
+	bool subgroup = true;
+	std::string path;
+
+	Util::CLICallbacks cbs;
+	cbs.add("--ubershader", [&](Util::CLIParser &) { ubershader = true; });
+	cbs.add("--nosubgroup", [&](Util::CLIParser &) { subgroup = false; });
+	cbs.default_handler = [&](const char *arg) { path = arg; };
+	Util::CLIParser parser(std::move(cbs), argc - 1, argv + 1);
+
+	if (!parser.parse() || path.empty())
 	{
-		LOGE("Usage: dump-bench <path>\n");
+		LOGE("Failed to parse.\n");
 		return EXIT_FAILURE;
 	}
 
@@ -234,9 +245,8 @@ int main(int argc, char **argv)
 	}
 
 	RasterizerGPU rasterizer;
-	rasterizer.init(device);
+	rasterizer.init(device, subgroup, ubershader);
 	rasterizer.resize(width, height);
-
 
 	auto start_run = Util::get_current_time_nsecs();
 	for (unsigned i = 0; i < 1000; i++)
@@ -251,6 +261,7 @@ int main(int argc, char **argv)
 		}
 		rasterizer.flush();
 	}
+	device.wait_idle();
 	auto end_run = Util::get_current_time_nsecs();
 	LOGI("Total time: %.3f s\n", (end_run - start_run) * 1e-9);
 

@@ -16,9 +16,7 @@ struct BBox
 	int min_x, max_x, min_y, max_y;
 };
 
-constexpr bool ENABLE_SUBGROUP = true;
-constexpr bool ENABLE_UBERSHADER = false;
-constexpr unsigned NUM_STATE_INDICES = ENABLE_UBERSHADER ? 16 : 64;
+constexpr unsigned MAX_NUM_STATE_INDICES = 64;
 
 struct RasterizerGPU::Impl
 {
@@ -27,6 +25,9 @@ struct RasterizerGPU::Impl
 	BufferHandle depth_buffer;
 	unsigned width = 0;
 	unsigned height = 0;
+	bool subgroup = false;
+	bool ubershader = false;
+	unsigned num_state_indices = 0;
 
 	struct
 	{
@@ -84,12 +85,12 @@ struct RasterizerGPU::Impl
 
 	struct
 	{
-		const ImageView *image_views[NUM_STATE_INDICES] = {};
+		const ImageView *image_views[64] = {};
 		unsigned state_count = 0;
 		const ImageView *current_image = nullptr;
 	} state;
 
-	void init(Device &device);
+	void init(Device &device, bool subgroup, bool ubershader);
 
 	void reset_staging();
 	void begin_staging();
@@ -310,7 +311,7 @@ void RasterizerGPU::Impl::clear_indirect_buffer(CommandBuffer &cmd)
 	cmd.begin_region("clear-indirect-buffer");
 	cmd.set_program("assets://shaders/clear_indirect_buffers.comp");
 	cmd.set_specialization_constant_mask(1);
-	cmd.set_specialization_constant(0, NUM_STATE_INDICES);
+	cmd.set_specialization_constant(0, MAX_NUM_STATE_INDICES);
 	cmd.set_storage_buffer(0, 0, *raster_work.item_count_per_variant);
 	cmd.dispatch(1, 1, 1);
 	cmd.end_region();
@@ -326,7 +327,7 @@ void RasterizerGPU::Impl::binning_low_res_prepass(CommandBuffer &cmd)
 	uint32_t subgroup_size = features.subgroup_properties.subgroupSize;
 
 	const VkSubgroupFeatureFlags required = VK_SUBGROUP_FEATURE_BALLOT_BIT | VK_SUBGROUP_FEATURE_BASIC_BIT;
-	if (ENABLE_SUBGROUP && (features.subgroup_properties.supportedOperations & required) == required &&
+	if (subgroup && (features.subgroup_properties.supportedOperations & required) == required &&
 	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
 	    can_support_minimum_subgroup_size(subgroup_size) && subgroup_size <= 64)
 	{
@@ -376,7 +377,7 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd, bool ubershader)
 	                                        VK_SUBGROUP_FEATURE_BASIC_BIT |
 	                                        VK_SUBGROUP_FEATURE_ARITHMETIC_BIT;
 
-	if (ENABLE_SUBGROUP && (features.subgroup_properties.supportedOperations & required) == required &&
+	if (subgroup && (features.subgroup_properties.supportedOperations & required) == required &&
 	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
 	    can_support_minimum_subgroup_size(subgroup_size) && subgroup_size <= 64)
 	{
@@ -463,7 +464,7 @@ void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 	{
 		cmd.set_program("assets://shaders/combiner.comp", { {"DERIVATIVE_GROUP_LINEAR", 1}, {"SUBGROUP", 0} });
 	}
-	else if (ENABLE_SUBGROUP && (features.subgroup_properties.supportedOperations & required) == required &&
+	else if (subgroup && (features.subgroup_properties.supportedOperations & required) == required &&
 	         (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
 	         can_support_minimum_subgroup_size(4))
 	{
@@ -522,7 +523,7 @@ void RasterizerGPU::Impl::run_rop_ubershader(CommandBuffer &cmd)
 	cmd.set_storage_buffer(0, 5, *staging.attributes_gpu);
 	cmd.set_storage_buffer(0, 6, *staging.state_index_gpu);
 
-	for (unsigned i = 0; i < NUM_STATE_INDICES; i++)
+	for (unsigned i = 0; i < num_state_indices; i++)
 	{
 		cmd.set_texture(1, i, i < state.state_count ? *state.image_views[i] : *state.image_views[0],
 		                StockSampler::TrilinearWrap);
@@ -541,7 +542,7 @@ void RasterizerGPU::Impl::run_rop_ubershader(CommandBuffer &cmd)
 	{
 		cmd.set_program("assets://shaders/rop_ubershader.comp", {{"DERIVATIVE_GROUP_LINEAR", 1}, {"SUBGROUP", 0}});
 	}
-	else if (ENABLE_SUBGROUP && (features.subgroup_properties.supportedOperations & required) == required &&
+	else if (subgroup && (features.subgroup_properties.supportedOperations & required) == required &&
 	         (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
 	         can_support_minimum_subgroup_size(4))
 	{
@@ -790,10 +791,10 @@ void RasterizerGPU::Impl::init_raster_work_buffers()
 	             VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 
 	// Round MAX_NUM_TILE_INSTANCES up to 0x10000.
-	info.size = (MAX_NUM_TILE_INSTANCES + 1) * sizeof(TileRasterWork) * NUM_STATE_INDICES;
+	info.size = (MAX_NUM_TILE_INSTANCES + 1) * sizeof(TileRasterWork) * MAX_NUM_STATE_INDICES;
 	raster_work.work_list_per_variant = device->create_buffer(info);
 
-	info.size = NUM_STATE_INDICES * (4 * sizeof(uint32_t));
+	info.size = MAX_NUM_STATE_INDICES * (4 * sizeof(uint32_t));
 	info.usage |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
 	raster_work.item_count_per_variant = device->create_buffer(info);
 }
@@ -826,9 +827,12 @@ static std::vector<T> readback_buffer(Device *device, const Buffer &buffer)
 	return result;
 }
 
-void RasterizerGPU::Impl::init(Device &device_)
+void RasterizerGPU::Impl::init(Device &device_, bool subgroup_, bool ubershader_)
 {
 	device = &device_;
+	subgroup = subgroup_;
+	ubershader = ubershader_;
+	num_state_indices = ubershader ? 16 : 64;
 
 	auto &features = device->get_device_features();
 	if (!features.storage_8bit_features.storageBuffer8BitAccess)
@@ -909,7 +913,7 @@ void RasterizerGPU::clear_color(uint32_t rgba)
 
 void RasterizerGPU::Impl::queue_primitive(const PrimitiveSetup &setup)
 {
-	unsigned num_conservative_tiles = ENABLE_UBERSHADER ? 0 : compute_num_conservative_tiles(setup);
+	unsigned num_conservative_tiles = ubershader ? 0 : compute_num_conservative_tiles(setup);
 
 	if (staging.count == MAX_PRIMITIVES)
 		flush();
@@ -927,7 +931,7 @@ void RasterizerGPU::Impl::queue_primitive(const PrimitiveSetup &setup)
 		state.state_count++;
 		current_state = 0;
 	}
-	else if (state.current_image != state.image_views[state.state_count - 1] && state.state_count == NUM_STATE_INDICES)
+	else if (state.current_image != state.image_views[state.state_count - 1] && state.state_count == num_state_indices)
 	{
 		flush();
 		begin_staging();
@@ -1077,9 +1081,9 @@ bool RasterizerGPU::save_canvas(const char *path)
 	return res;
 }
 
-void RasterizerGPU::init(Device &device)
+void RasterizerGPU::init(Device &device, bool subgroup, bool ubershader)
 {
-	impl->init(device);
+	impl->init(device, subgroup, ubershader);
 }
 
 void RasterizerGPU::flush()
@@ -1089,7 +1093,7 @@ void RasterizerGPU::flush()
 
 void RasterizerGPU::Impl::flush()
 {
-	if (ENABLE_UBERSHADER)
+	if (ubershader)
 		flush_ubershader();
 	else
 		flush_split();

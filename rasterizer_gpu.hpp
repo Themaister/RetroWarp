@@ -15,7 +15,7 @@ public:
 	RasterizerGPU();
 	~RasterizerGPU();
 
-	void init(Vulkan::Device &device);
+	void init(Vulkan::Device &device, bool subgroup, bool ubershader);
 
 	void resize(unsigned width, unsigned height);
 	void clear_depth(uint16_t z = 0xffff);

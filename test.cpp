@@ -19,6 +19,7 @@
 #include "scene_loader.hpp"
 #include "mesh_util.hpp"
 #include "application.hpp"
+#include "cli_parser.hpp"
 
 using namespace RetroWarp;
 using namespace Granite;
@@ -221,7 +222,7 @@ static void create_software_renderable(Entity *entity, RenderableComponent *rend
 
 struct SWRenderApplication : Application, EventHandler
 {
-	explicit SWRenderApplication(const char *path);
+	explicit SWRenderApplication(const std::string &path, bool subgroup, bool ubershader);
 	void render_frame(double, double) override;
 
 	SceneLoader loader;
@@ -250,6 +251,8 @@ struct SWRenderApplication : Application, EventHandler
 	};
 	std::vector<Cached> setup_cache;
 	bool update_setup_cache = true;
+	bool subgroup;
+	bool ubershader;
 };
 
 constexpr unsigned WIDTH = 1920;
@@ -257,7 +260,7 @@ constexpr unsigned HEIGHT = 1080;
 
 void SWRenderApplication::on_device_created(const Vulkan::DeviceCreatedEvent& e)
 {
-	rasterizer_gpu.init(e.get_device());
+	rasterizer_gpu.init(e.get_device(), subgroup, ubershader);
 	rasterizer_gpu.resize(WIDTH, HEIGHT);
 }
 
@@ -319,7 +322,8 @@ void SWRenderApplication::end_dump_frame()
 	dump_file = nullptr;
 }
 
-SWRenderApplication::SWRenderApplication(const char *path)
+SWRenderApplication::SWRenderApplication(const std::string &path, bool subgroup_, bool ubershader_)
+	: subgroup(subgroup_), ubershader(ubershader_)
 {
 	loader.load_scene(path);
 
@@ -474,11 +478,23 @@ namespace Granite
 {
 Application *application_create(int argc, char **argv)
 {
-	//setup_fixed_divider();
-	if (argc != 2)
+	bool ubershader = false;
+	bool subgroup = true;
+	std::string path;
+
+	Util::CLICallbacks cbs;
+	cbs.add("--ubershader", [&](Util::CLIParser &) { ubershader = true; });
+	cbs.add("--nosubgroup", [&](Util::CLIParser &) { subgroup = false; });
+	cbs.default_handler = [&](const char *arg) { path = arg; };
+	Util::CLIParser parser(std::move(cbs), argc - 1, argv + 1);
+
+	if (!parser.parse() || path.empty())
+	{
+		LOGE("Failed to parse.\n");
 		return nullptr;
+	}
 
 	Global::filesystem()->register_protocol("assets", std::make_unique<OSFilesystem>(ASSET_DIRECTORY));
-	return new SWRenderApplication(argv[1]);
+	return new SWRenderApplication(path, subgroup, ubershader);
 }
 }
