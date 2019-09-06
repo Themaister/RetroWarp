@@ -29,6 +29,7 @@ layout(std430, set = 0, binding = 3) writeonly buffer TileBitmaskCoarse
     uint binned_bitmask_coarse[];
 };
 
+#if !UBERSHADER
 layout(std430, set = 0, binding = 4) writeonly buffer TileInstanceOffset
 {
     uint16_t tile_instance_offset[];
@@ -55,11 +56,13 @@ layout(std430, set = 0, binding = 7) readonly buffer StateIndex
 {
     uint8_t state_indices[];
 };
+#endif
 
 #if !SUBGROUP
 shared uint merged_mask;
 #endif
 
+#if !UBERSHADER
 #if SUBGROUP
 uint allocate_work_offset(uint variant_index)
 {
@@ -88,6 +91,7 @@ uint allocate_work_offset(uint variant_index)
     return res;
 #endif
 }
+#endif
 #endif
 
 void main()
@@ -129,12 +133,16 @@ void main()
 
 #if SUBGROUP
     uvec4 ballot_result = subgroupBallot(group_bin_to_tile);
+#if !UBERSHADER
     uint bit_count = uint(bitCount(binned));
     uint total_bit_count = subgroupAdd(bit_count);
     uint instance_offset;
+#endif
     if (subgroupElect())
     {
+#if !UBERSHADER
         instance_offset = atomicAdd(item_counts_per_variant[0].w, total_bit_count);
+#endif
         uint binned_bitmask_offset = uint(TILE_BINNING_STRIDE_COARSE * linear_tile);
         if (gl_SubgroupSize == 64u)
         {
@@ -147,8 +155,10 @@ void main()
         }
     }
 
+#if !UBERSHADER
     instance_offset = subgroupBroadcastFirst(instance_offset);
     instance_offset += subgroupInclusiveAdd(bit_count) - bit_count;
+#endif
 #else
     if (local_index == 0u)
         merged_mask = 0u;
@@ -165,9 +175,13 @@ void main()
         binned_bitmask_coarse[binned_bitmask_offset + gl_WorkGroupID.x] = merged_mask;
     }
 
+#if !UBERSHADER
     uint bit_count = uint(bitCount(binned));
     uint instance_offset = atomicAdd(item_counts_per_variant[0].w, bit_count);
 #endif
+#endif
+
+#if !UBERSHADER
     tile_instance_offset[linear_tile * TILE_BINNING_STRIDE + mask_index] = uint16_t(instance_offset);
 
     while (binned != 0u)
@@ -182,4 +196,5 @@ void main()
             u16vec4(uvec4(tile.x, tile.y, instance_offset, primitive_index));
         instance_offset++;
     }
+#endif
 }

@@ -111,7 +111,7 @@ struct RasterizerGPU::Impl
 	void set_fb_info(CommandBuffer &cmd);
 	void clear_indirect_buffer(CommandBuffer &cmd);
 	void binning_low_res_prepass(CommandBuffer &cmd);
-	void binning_full_res(CommandBuffer &cmd);
+	void binning_full_res(CommandBuffer &cmd, bool ubershader);
 	void dispatch_combiner_work(CommandBuffer &cmd);
 	void run_rop(CommandBuffer &cmd);
 	void run_rop_ubershader(CommandBuffer &cmd);
@@ -354,7 +354,7 @@ void RasterizerGPU::Impl::binning_low_res_prepass(CommandBuffer &cmd)
 	cmd.end_region();
 }
 
-void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd)
+void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd, bool ubershader)
 {
 	cmd.begin_region("binning-full-res");
 	cmd.set_storage_buffer(0, 0, *binning.mask_buffer[tile_instance_data.index]);
@@ -379,7 +379,7 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd)
 	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
 	    can_support_minimum_subgroup_size(subgroup_size) && subgroup_size <= 64)
 	{
-		cmd.set_program("assets://shaders/binning.comp", {{ "SUBGROUP", 1 }});
+		cmd.set_program("assets://shaders/binning.comp", {{ "SUBGROUP", 1 }, { "UBERSHADER", ubershader ? 1 : 0 }});
 		cmd.set_specialization_constant_mask(1);
 		cmd.set_specialization_constant(0, subgroup_size);
 
@@ -398,7 +398,7 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd)
 	else
 	{
 		// Fallback with shared memory.
-		cmd.set_program("assets://shaders/binning.comp", {{ "SUBGROUP", 0 }});
+		cmd.set_program("assets://shaders/binning.comp", {{ "SUBGROUP", 0 }, { "UBERSHADER", ubershader ? 1 : 0 }});
 		cmd.dispatch((num_masks + 31) / 32,
 		             (width + TILE_WIDTH - 1) / TILE_WIDTH,
 		             (height + TILE_HEIGHT - 1) / TILE_HEIGHT);
@@ -619,7 +619,7 @@ void RasterizerGPU::Impl::flush_ubershader()
 
 	t1 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 
-	binning_full_res(*cmd);
+	binning_full_res(*cmd, true);
 
 	auto t2 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 	device->register_time_interval(t1, t2, "binning-full-res");
@@ -698,7 +698,7 @@ void RasterizerGPU::Impl::flush_split()
 	t1 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 
 	// Binning at full-resolution.
-	binning_full_res(*cmd);
+	binning_full_res(*cmd, false);
 
 	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
