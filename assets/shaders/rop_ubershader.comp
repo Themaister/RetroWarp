@@ -1,6 +1,7 @@
 #version 450
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_8bit_storage : require
+#extension GL_EXT_scalar_block_layout : require
 
 #if defined(DERIVATIVE_GROUP_QUAD)
 #extension GL_NV_compute_shader_derivatives : require
@@ -21,9 +22,9 @@ layout(local_size_x = 256) in;
 #define PRIMITIVE_SETUP_ATTR_BUFFER 5
 #include "rasterizer_helpers.h"
 
-layout(std430, set = 0, binding = 6) readonly buffer StateIndices
+layout(std430, set = 0, binding = 6) uniform StateIndices
 {
-    uint8_t state_indices[];
+    uint8_t state_indices[MAX_PRIMITIVES];
 };
 
 layout(std430, set = 0, binding = 0) buffer ColorFramebuffer

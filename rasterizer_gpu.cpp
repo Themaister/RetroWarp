@@ -228,12 +228,14 @@ void RasterizerGPU::Impl::begin_staging()
 {
 	BufferCreateInfo info;
 	info.domain = BufferDomain::Device;
-	info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
+	info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 	info.size = MAX_PRIMITIVES * sizeof(PrimitiveSetupPos);
 	staging.positions_gpu = device->create_buffer(info);
+	info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 	info.size = MAX_PRIMITIVES * sizeof(PrimitiveSetupAttr);
 	staging.attributes_gpu = device->create_buffer(info);
+	info.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 	info.size = MAX_PRIMITIVES * sizeof(uint8_t);
 	staging.state_index_gpu = device->create_buffer(info);
 
@@ -261,8 +263,10 @@ void RasterizerGPU::Impl::begin_staging()
 
 		info.size = MAX_PRIMITIVES * sizeof(PrimitiveSetupPos);
 		staging.positions = device->create_buffer(info);
+
 		info.size = MAX_PRIMITIVES * sizeof(PrimitiveSetupAttr);
 		staging.attributes = device->create_buffer(info);
+
 		info.size = MAX_PRIMITIVES * sizeof(uint8_t);
 		staging.state_index = device->create_buffer(info);
 
@@ -522,7 +526,7 @@ void RasterizerGPU::Impl::run_rop_ubershader(CommandBuffer &cmd)
 	cmd.set_storage_buffer(0, 3, *binning.mask_buffer_coarse[tile_instance_data.index]);
 	cmd.set_storage_buffer(0, 4, *staging.positions_gpu);
 	cmd.set_storage_buffer(0, 5, *staging.attributes_gpu);
-	cmd.set_storage_buffer(0, 6, *staging.state_index_gpu);
+	cmd.set_uniform_buffer(0, 6, *staging.state_index_gpu);
 
 	for (unsigned i = 0; i < num_state_indices; i++)
 	{
@@ -845,6 +849,8 @@ void RasterizerGPU::Impl::init(Device &device_, bool subgroup_, bool ubershader_
 		throw std::runtime_error("8-bit storage not supported.");
 	if (!features.storage_16bit_features.storageBuffer16BitAccess)
 		throw std::runtime_error("16-bit storage not supported.");
+	if (!features.ubo_std430_features.uniformBufferStandardLayout && !features.scalar_block_features.scalarBlockLayout)
+		throw std::runtime_error("UBO std430 storage not supported.");
 
 	init_binning_buffers();
 	init_prefix_sum_buffers();
