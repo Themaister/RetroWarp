@@ -2,10 +2,12 @@
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_8bit_storage : require
 #extension GL_EXT_samplerless_texture_functions : require
+#extension GL_EXT_scalar_block_layout : require
 layout(local_size_x = 16, local_size_y = 16) in;
 
 #include "constants.h"
 #include "fb_info.h"
+#include "rop.h"
 
 layout(std430, set = 0, binding = 0) buffer ColorFramebuffer
 {
@@ -69,9 +71,7 @@ void main()
         return;
 
     int pixel_index = int(coord.x) + int(coord.y) * fb_info.fb_stride;
-
-    uvec4 current_color = uvec4(color_data[pixel_index]);
-    uint current_z = uint(depth_data[pixel_index]);
+    set_initial_rop(uvec4(color_data[pixel_index]), uint(depth_data[pixel_index]));
 
     ivec2 tile = ivec2(gl_WorkGroupID.xy);
     int linear_tile = tile.x + tile.y * MAX_TILES_X;
@@ -100,12 +100,10 @@ void main()
                 uint flags = uint(flag_tiles[tile_instance].flag[gl_LocalInvocationIndex]);
                 if (flags != 0u)
                 {
+                    uint variant = get_rop_state_indices(mask_index * 32 + i);
                     uint z = uint(depth_tiles[tile_instance].depth[gl_LocalInvocationIndex]);
-                    if (z < current_z)
-                    {
-                        current_z = z;
-                        current_color = uvec4(color_tiles[tile_instance].color[gl_LocalInvocationIndex]);
-                    }
+                    if (rop_depth_test(z, variant))
+                        rop_blend(uvec4(color_tiles[tile_instance].color[gl_LocalInvocationIndex]), variant);
                 }
 
                 tile_instance++;
@@ -113,6 +111,6 @@ void main()
         }
     }
 
-    color_data[pixel_index] = u8vec4(current_color);
-    depth_data[pixel_index] = uint16_t(current_z);
+    color_data[pixel_index] = u8vec4(get_current_color());
+    depth_data[pixel_index] = uint16_t(get_current_depth());
 }
