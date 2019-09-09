@@ -380,6 +380,7 @@ void RasterizerGPU::Impl::clear_indirect_buffer(CommandBuffer &cmd)
 	cmd.set_storage_buffer(0, 0, *raster_work.item_count_per_variant);
 	cmd.dispatch(1, 1, 1);
 	cmd.end_region();
+	cmd.set_specialization_constant_mask(0);
 }
 
 void RasterizerGPU::Impl::binning_low_res_prepass(CommandBuffer &cmd)
@@ -421,6 +422,7 @@ void RasterizerGPU::Impl::binning_low_res_prepass(CommandBuffer &cmd)
 		             (height + TILE_DOWNSAMPLE * TILE_HEIGHT - 1) / (TILE_DOWNSAMPLE * TILE_HEIGHT));
 	}
 	cmd.end_region();
+	cmd.set_specialization_constant_mask(0);
 }
 
 void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd, bool ubershader)
@@ -439,7 +441,7 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd, bool ubershader)
 		cmd.set_storage_buffer(0, 6, *tile_count.tile_offset[tile_instance_data.index]);
 		cmd.set_storage_buffer(0, 7, *raster_work.item_count_per_variant);
 		cmd.set_storage_buffer(0, 8, *raster_work.work_list_per_variant);
-		cmd.set_storage_buffer(0, 9, *staging.state_index_gpu);
+		cmd.set_uniform_buffer(0, 9, *staging.state_index_gpu);
 	}
 
 	auto &features = device->get_device_features();
@@ -453,21 +455,25 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd, bool ubershader)
 
 	if (subgroup && (features.subgroup_properties.supportedOperations & required) == required &&
 	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
-	    can_support_minimum_subgroup_size(subgroup_size) && subgroup_size <= 64)
+	    can_support_minimum_subgroup_size(TILE_DOWNSAMPLE))
 	{
 		cmd.set_program("assets://shaders/binning.comp", {{ "SUBGROUP", 1 }, { "UBERSHADER", ubershader ? 1 : 0 }});
-		cmd.set_specialization_constant_mask(1);
+		cmd.set_specialization_constant_mask(3);
 		cmd.set_specialization_constant(0, subgroup_size);
+
+		uint32_t subgroup_tiles_x = TILE_DOWNSAMPLE;
+		uint32_t subgroup_tiles_y = subgroup_size / TILE_DOWNSAMPLE;
+		cmd.set_specialization_constant(1, TILE_DOWNSAMPLE);
 
 		if (supports_subgroup_size_control())
 		{
 			cmd.enable_subgroup_size_control(true);
-			cmd.set_subgroup_size_log2(true, trailing_zeroes(subgroup_size), trailing_zeroes(subgroup_size));
+			cmd.set_subgroup_size_log2(true, trailing_zeroes(TILE_DOWNSAMPLE), 7);
 		}
 
-		cmd.dispatch((num_masks + subgroup_size - 1) / subgroup_size,
-		             (width + TILE_WIDTH - 1) / TILE_WIDTH,
-		             (height + TILE_HEIGHT - 1) / TILE_HEIGHT);
+		cmd.dispatch((num_masks + 31) / 32,
+		             (width + subgroup_tiles_x * TILE_WIDTH - 1) / (subgroup_tiles_x * TILE_WIDTH),
+		             (height + subgroup_tiles_y * TILE_HEIGHT - 1) / (subgroup_tiles_y * TILE_HEIGHT));
 
 		cmd.enable_subgroup_size_control(false);
 	}
@@ -476,11 +482,12 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd, bool ubershader)
 		// Fallback with shared memory.
 		cmd.set_program("assets://shaders/binning.comp", {{ "SUBGROUP", 0 }, { "UBERSHADER", ubershader ? 1 : 0 }});
 		cmd.dispatch((num_masks + 31) / 32,
-		             (width + TILE_WIDTH - 1) / TILE_WIDTH,
-		             (height + TILE_HEIGHT - 1) / TILE_HEIGHT);
+		             (width + 8 * TILE_WIDTH - 1) / (8 * TILE_WIDTH),
+		             (height + 4 * TILE_HEIGHT - 1) / (4 * TILE_HEIGHT));
 	}
 
 	cmd.end_region();
+	cmd.set_specialization_constant_mask(0);
 }
 
 bool RasterizerGPU::Impl::can_support_minimum_subgroup_size(unsigned size) const
