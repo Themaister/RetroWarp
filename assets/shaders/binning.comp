@@ -66,10 +66,6 @@ layout(std430, set = 0, binding = 9) uniform StateIndex
 };
 #endif
 
-#if !SUBGROUP
-shared uint merged_mask;
-#endif
-
 void main()
 {
 #if SUBGROUP
@@ -89,6 +85,8 @@ void main()
 
     uint group_binned = 0u;
     int mask_end = min(mask_index + 32, fb_info.primitive_count_32);
+
+    uint group_binned_mask = 1u;
 
     // Wave uniform loop.
     while (mask_index < mask_end)
@@ -115,13 +113,15 @@ void main()
         }
 
         binned_bitmask[linear_tile * TILE_BINNING_STRIDE + mask_index] = binned;
-        group_binned <<= 1u;
         if (binned != 0u)
-            group_binned |= 1u;
+            group_binned |= group_binned_mask;
+        group_binned_mask <<= 1u;
 
 #if !UBERSHADER
         // Allocate instance offsets per mask.
         uint bit_count = uint(bitCount(binned));
+
+#if SUBGROUP
         uint total_bit_count = subgroupAdd(bit_count);
         uint instance_offset = 0u;
         if (subgroupElect())
@@ -131,6 +131,7 @@ void main()
         }
         instance_offset = subgroupBroadcastFirst(instance_offset);
         instance_offset += subgroupInclusiveAdd(bit_count) - bit_count;
+        tile_instance_offset[linear_tile * TILE_BINNING_STRIDE + mask_index] = uint16_t(instance_offset);
 
         // As a subgroup, we figure out how many work instances we need to create per primitive.
         uint overall_binned = subgroupOr(binned);
@@ -162,6 +163,25 @@ void main()
                 instance_offset++;
             }
         }
+#else
+        uint instance_offset = 0u;
+        if (bit_count != 0u)
+            instance_offset = atomicAdd(item_counts_per_variant[0].w, bit_count);
+        tile_instance_offset[linear_tile * TILE_BINNING_STRIDE + mask_index] = uint16_t(instance_offset);
+
+        while (binned != 0u)
+        {
+            int i = findLSB(binned);
+            binned &= ~uint(1 << i);
+            int primitive_index = i + mask_index * 32;
+            uint variant_index = uint(state_indices[primitive_index]);
+            uint work_offset = atomicAdd(item_counts_per_variant[variant_index].x, 1u);
+            tile_raster_work[work_offset + uint(TILE_INSTANCE_STRIDE) * variant_index] =
+                u16vec4(uvec4(tile.x, tile.y, instance_offset, primitive_index));
+            instance_offset++;
+        }
+#endif
+
 #endif
 
         mask_index++;

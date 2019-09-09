@@ -470,7 +470,7 @@ void SWRenderApplication::render_frame(double frame_time, double)
 	else
 		LOGI("Cached %u primitive setups!\n", unsigned(setup_cache.size()));
 
-#if 0
+#if 1
 	for (auto &setup : setup_cache)
 	{
 		if (queue_dump_frame)
@@ -501,7 +501,7 @@ void SWRenderApplication::render_frame(double frame_time, double)
 			dump_primitives(&setup.setup, 1);
 	}
 #else
-	for (unsigned i = 0; i < 64; i++)
+	for (unsigned i = 0; i < 40; i++)
 	{
 		InputPrimitive prim = {};
 		prim.vertices[0].x = -0.5f + i / 200.0f;
