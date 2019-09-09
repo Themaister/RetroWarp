@@ -121,6 +121,7 @@ struct RasterizerGPU::Impl
 	void flush();
 	void flush_ubershader();
 	void flush_split();
+	ImageHandle copy_to_framebuffer();
 
 	void queue_primitive(const PrimitiveSetup &setup);
 	unsigned compute_num_conservative_tiles(const PrimitiveSetup &setup) const;
@@ -177,9 +178,24 @@ void RasterizerGPU::Impl::reset_staging()
 {
 	staging.positions.reset();
 	staging.attributes.reset();
+	staging.render_state_index.reset();
+	staging.render_state.reset();
+	staging.state_index.reset();
+
+	staging.positions_gpu.reset();
+	staging.attributes_gpu.reset();
+	staging.render_state_index_gpu.reset();
+	staging.render_state_gpu.reset();
+	staging.state_index_gpu.reset();
+
 	staging.mapped_attributes = nullptr;
 	staging.mapped_positions = nullptr;
+	staging.mapped_state_index = nullptr;
+	staging.mapped_render_state = nullptr;
+	staging.mapped_render_state_index = nullptr;
 	staging.count = 0;
+	state.render_state_count = 0;
+	state.state_count = 0;
 	staging.num_conservative_tile_instances = 0;
 }
 
@@ -1070,25 +1086,29 @@ void RasterizerGPU::rasterize_primitives(const RetroWarp::PrimitiveSetup *setup,
 
 ImageHandle RasterizerGPU::copy_to_framebuffer()
 {
-	ImageCreateInfo info = ImageCreateInfo::immutable_2d_image(impl->width, impl->height, VK_FORMAT_R8G8B8A8_SRGB);
+	flush();
+	return impl->copy_to_framebuffer();
+}
+
+ImageHandle RasterizerGPU::Impl::copy_to_framebuffer()
+{
+	ImageCreateInfo info = ImageCreateInfo::immutable_2d_image(width, height, VK_FORMAT_R8G8B8A8_SRGB);
 	info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 	info.initial_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-	auto image = impl->device->create_image(info);
+	auto image = device->create_image(info);
 
-	impl->flush();
-
-	auto cmd = impl->device->request_command_buffer();
+	auto cmd = device->request_command_buffer();
 	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
 	cmd->image_barrier(*image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 	                   VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
 	                   VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-	cmd->copy_buffer_to_image(*image, *impl->color_buffer, 0, {}, { impl->width, impl->height, 1 }, 0, 0,
+	cmd->copy_buffer_to_image(*image, *color_buffer, 0, {}, { width, height, 1 }, 0, 0,
 	                          { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 });
 	cmd->image_barrier(*image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 	                   VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
 	                   VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
-	impl->device->submit(cmd);
+	device->submit(cmd);
 	return image;
 }
 
@@ -1140,8 +1160,9 @@ void RasterizerGPU::Impl::flush()
 	else
 		flush_split();
 
-	state.state_count = 0;
-	state.render_state_count = 0;
+	reset_staging();
+	if (width && height)
+		copy_to_framebuffer();
 }
 
 }

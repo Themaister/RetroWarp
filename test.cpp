@@ -374,7 +374,7 @@ static void transform_vertex(Vertex &out_vertex, const Vertex &in_vertex, const 
 	out_vertex.color[0] = ndotl;
 	out_vertex.color[1] = ndotl;
 	out_vertex.color[2] = ndotl;
-	out_vertex.color[3] = 1.0f;
+	out_vertex.color[3] = 0.5f;
 	memcpy(out_vertex.clip, clip.data, 4 * sizeof(float));
 }
 
