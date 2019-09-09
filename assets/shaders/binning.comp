@@ -118,7 +118,7 @@ void main()
     uint binned = 0u;
     if (mask_index < fb_info.primitive_count_32)
     {
-        int linear_tile_lowres = (tile.y >> 4) * MAX_TILES_X_LOW_RES + (tile.x >> 4);
+        int linear_tile_lowres = (tile.y >> TILE_DOWNSAMPLE_LOG2) * MAX_TILES_X_LOW_RES + (tile.x >> TILE_DOWNSAMPLE_LOG2);
         int binned_bitmask_offset = linear_tile_lowres * TILE_BINNING_STRIDE + mask_index;
 
         uint low_res_binned = binned_bitmask_low_res[binned_bitmask_offset];

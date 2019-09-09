@@ -30,8 +30,8 @@ layout(std430, set = 0, binding = 0) writeonly buffer TileBitmask
 void main()
 {
     ivec2 tile = ivec2(gl_WorkGroupID.yz);
-    ivec2 base_coord = tile * ivec2(TILE_WIDTH * 16, TILE_HEIGHT * 16);
-    ivec2 end_coord = min(base_coord + ivec2(TILE_WIDTH * 16, TILE_HEIGHT * 16), ivec2(fb_info.resolution));
+    ivec2 base_coord = tile * (ivec2(TILE_WIDTH, TILE_HEIGHT) * TILE_DOWNSAMPLE);
+    ivec2 end_coord = min(base_coord + ivec2(TILE_WIDTH, TILE_HEIGHT) * TILE_DOWNSAMPLE, ivec2(fb_info.resolution));
 
     int primitive_index = int(gl_GlobalInvocationID.x);
 
