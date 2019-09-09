@@ -1,6 +1,7 @@
 #version 450
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_8bit_storage : require
+#extension GL_EXT_scalar_block_layout : require
 
 #if defined(DERIVATIVE_GROUP_QUAD)
 #extension GL_NV_compute_shader_derivatives : require
@@ -16,6 +17,10 @@ layout(local_size_x = 256) in;
 #else
 layout(local_size_x = 256) in;
 #endif
+
+#define RENDER_STATE_INDEX_BUFFER 6
+#define RENDER_STATE_BUFFER 7
+#include "render_state.h"
 
 #define PRIMITIVE_SETUP_POS_BUFFER 4
 #define PRIMITIVE_SETUP_ATTR_BUFFER 5

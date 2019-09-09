@@ -1,6 +1,8 @@
 #ifndef ROP_H_
 #define ROP_H_
 
+#include "render_state.h"
+
 uvec4 current_color;
 uint current_z;
 
@@ -24,25 +26,9 @@ void set_initial_rop(uvec4 color, uint z)
 	current_z = z;
 }
 
-layout(std430, set = 0, binding = ROP_STATE_INDEX_BUFFER) uniform ROPStateIndex
-{
-	uint16_t rop_state_indices[];
-};
-
-struct ROPState
-{
-	uint8_t depth_state;
-	uint8_t blend_state;
-};
-
-layout(std430, set = 0, binding = ROP_STATE_BUFFER) uniform ROPStates
-{
-	ROPState rop_states[1024];
-};
-
 uint get_rop_state_variant(int primitive_index)
 {
-	return uint(rop_state_indices[primitive_index]);
+	return uint(render_state_indices[primitive_index]);
 }
 
 uvec3 lerp_unorm8(uvec3 a, uvec3 b, uint l)
@@ -60,7 +46,7 @@ uvec4 blend_unorm(uvec4 src, uvec4 dst)
 
 void rop_blend(uvec4 color, uint variant)
 {
-	uint blend_state = uint(rop_states[variant].blend_state);
+	uint blend_state = uint(render_states[variant].blend_state);
 	switch (blend_state)
 	{
 	case ROP_BLEND_REPLACE:
@@ -72,7 +58,7 @@ void rop_blend(uvec4 color, uint variant)
 		break;
 
 	case ROP_BLEND_SUBTRACT:
-		current_color = uvec4(clamp(ivec4(current_color), ivec4(color), ivec4(0), ivec4(255)));
+		current_color = uvec4(clamp(ivec4(current_color) - ivec4(color), ivec4(0), ivec4(255)));
 		break;
 
 	case ROP_BLEND_ALPHA:
@@ -94,7 +80,7 @@ uint get_current_depth()
 bool rop_depth_test(uint z, uint variant)
 {
 	bool ret;
-	uint depth_state = uint(rop_states[variant].depth_state);
+	uint depth_state = uint(render_states[variant].depth_state);
 	uint z_test = depth_state & 7u;
 	bool z_write = (depth_state & 0x80u) != 0;
 	switch (z_test)

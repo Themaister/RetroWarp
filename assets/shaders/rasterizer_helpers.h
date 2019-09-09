@@ -68,8 +68,10 @@ ivec2 compute_span_y(uint primitive_index)
 	int span_begin_y = (int(primitives_pos[primitive_index].y_lo) + ((1 << SUBPIXELS_LOG2) - 1)) >> SUBPIXELS_LOG2;
 	int span_end_y = (int(primitives_pos[primitive_index].y_hi) - 1) >> SUBPIXELS_LOG2;
 
-	span_begin_y = max(span_begin_y, fb_info.scissor.y);
-	span_end_y = min(span_end_y, fb_info.scissor.y + fb_info.scissor.w - 1);
+	uint render_state_index = uint(render_state_indices[primitive_index]);
+	ivec4 scissor = ivec4(render_states[render_state_index].scissor);
+	span_begin_y = max(span_begin_y, scissor.y);
+	span_end_y = min(span_end_y, scissor.y + scissor.w - 1);
 
 	return ivec2(span_begin_y, span_end_y);
 }
@@ -113,6 +115,11 @@ int max2(ivec2 a)
 
 bool bin_primitive(uint primitive_index, ivec2 start, ivec2 end)
 {
+	uint render_state_index = uint(render_state_indices[primitive_index]);
+	ivec4 scissor = ivec4(render_states[render_state_index].scissor);
+	start = max(start, scissor.xy);
+	end = min(end, scissor.xy + scissor.zw - 1);
+
     int start_y = start.y << SUBPIXELS_LOG2;
     int end_y = (end.y - 1) << SUBPIXELS_LOG2;
     // First, we clip start/end against y_lo, y_hi.
@@ -157,8 +164,10 @@ ivec2 compute_span_x(uint primitive_index, int y)
 	int start_x = (xs.x + RASTER_ROUNDING) >> (16 + SUBPIXELS_LOG2);
 	int end_x = (xs.y - 1) >> (16 + SUBPIXELS_LOG2);
 
-	start_x = max(start_x, fb_info.scissor.x);
-	end_x = min(end_x, fb_info.scissor.x + fb_info.scissor.z - 1);
+	uint render_state_index = uint(render_state_indices[primitive_index]);
+	ivec4 scissor = ivec4(render_states[render_state_index].scissor);
+	start_x = max(start_x, scissor.x);
+	end_x = min(end_x, scissor.x + scissor.z - 1);
 
 	return ivec2(start_x, end_x);
 }

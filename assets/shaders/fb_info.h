@@ -3,7 +3,6 @@
 
 layout(set = 2, binding = 0, std140) uniform FBInfo
 {
-	ivec4 scissor;
 	uvec2 resolution;
 	uvec2 resolution_tiles;
 	int fb_stride;

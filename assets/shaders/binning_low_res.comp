@@ -1,6 +1,7 @@
 #version 450
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_8bit_storage : require
+#extension GL_EXT_scalar_block_layout : require
 
 #if SUBGROUP
 #extension GL_KHR_shader_subgroup_basic : require
@@ -18,6 +19,10 @@ layout(std430, set = 0, binding = 0) writeonly buffer TileBitmask
 {
     uint binned_bitmask[];
 };
+
+#define RENDER_STATE_INDEX_BUFFER 2
+#define RENDER_STATE_BUFFER 3
+#include "render_state.h"
 
 #define PRIMITIVE_SETUP_POS_BUFFER 1
 #include "rasterizer_helpers.h"

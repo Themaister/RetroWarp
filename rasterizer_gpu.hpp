@@ -45,6 +45,7 @@ public:
 
 	void set_depth_state(DepthTest mode, DepthWrite write);
 	void set_rop_state(BlendState state);
+	void set_scissor(int x, int y, int width, int height);
 
 	void resize(unsigned width, unsigned height);
 	void clear_depth(uint16_t z = 0xffff);

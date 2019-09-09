@@ -1,6 +1,7 @@
 #version 450
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_8bit_storage : require
+#extension GL_EXT_scalar_block_layout : require
 
 #if SUBGROUP
 #extension GL_KHR_shader_subgroup_basic : require
@@ -16,6 +17,10 @@ layout(std430, set = 0, binding = 0) writeonly buffer TileBitmask
     uint binned_bitmask[];
 };
 
+#define RENDER_STATE_INDEX_BUFFER 4
+#define RENDER_STATE_BUFFER 5
+#include "render_state.h"
+
 #define PRIMITIVE_SETUP_POS_BUFFER 1
 #include "rasterizer_helpers.h"
 
@@ -30,12 +35,12 @@ layout(std430, set = 0, binding = 3) writeonly buffer TileBitmaskCoarse
 };
 
 #if !UBERSHADER
-layout(std430, set = 0, binding = 4) writeonly buffer TileInstanceOffset
+layout(std430, set = 0, binding = 6) writeonly buffer TileInstanceOffset
 {
     uint16_t tile_instance_offset[];
 };
 
-layout(std430, set = 0, binding = 5) buffer IndirectBuffer
+layout(std430, set = 0, binding = 7) buffer IndirectBuffer
 {
     uvec4 item_counts_per_variant[];
 };
@@ -47,12 +52,12 @@ struct TileRasterWork
     uint16_t primitive;
 };
 
-layout(std430, set = 0, binding = 6) writeonly buffer WorkList
+layout(std430, set = 0, binding = 8) writeonly buffer WorkList
 {
     u16vec4 tile_raster_work[];
 };
 
-layout(std430, set = 0, binding = 7) readonly buffer StateIndex
+layout(std430, set = 0, binding = 9) readonly buffer StateIndex
 {
     uint8_t state_indices[];
 };

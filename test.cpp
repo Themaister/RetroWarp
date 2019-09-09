@@ -263,6 +263,8 @@ void SWRenderApplication::on_device_created(const Vulkan::DeviceCreatedEvent& e)
 {
 	rasterizer_gpu.init(e.get_device(), subgroup, ubershader, async_compute);
 	rasterizer_gpu.resize(WIDTH, HEIGHT);
+	rasterizer_gpu.set_rop_state(BlendState::Replace);
+	rasterizer_gpu.set_depth_state(DepthTest::LE, DepthWrite::On);
 }
 
 void SWRenderApplication::on_device_destroyed(const Vulkan::DeviceCreatedEvent &)

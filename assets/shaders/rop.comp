@@ -7,6 +7,9 @@ layout(local_size_x = 16, local_size_y = 16) in;
 
 #include "constants.h"
 #include "fb_info.h"
+
+#define RENDER_STATE_INDEX_BUFFER 8
+#define RENDER_STATE_BUFFER 9
 #include "rop.h"
 
 layout(std430, set = 0, binding = 0) buffer ColorFramebuffer
@@ -100,7 +103,7 @@ void main()
                 uint flags = uint(flag_tiles[tile_instance].flag[gl_LocalInvocationIndex]);
                 if (flags != 0u)
                 {
-                    uint variant = get_rop_state_indices(mask_index * 32 + i);
+                    uint variant = get_rop_state_variant(mask_index * 32 + i);
                     uint z = uint(depth_tiles[tile_instance].depth[gl_LocalInvocationIndex]);
                     if (rop_depth_test(z, variant))
                         rop_blend(uvec4(color_tiles[tile_instance].color[gl_LocalInvocationIndex]), variant);
