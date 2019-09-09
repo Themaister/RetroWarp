@@ -222,7 +222,8 @@ static void create_software_renderable(Entity *entity, RenderableComponent *rend
 
 struct SWRenderApplication : Application, EventHandler
 {
-	explicit SWRenderApplication(const std::string &path, bool subgroup, bool ubershader, bool async_compute);
+	explicit SWRenderApplication(const std::string &path, bool subgroup, bool ubershader, bool async_compute,
+	                             unsigned width, unsigned height);
 	void render_frame(double, double) override;
 
 	SceneLoader loader;
@@ -255,15 +256,14 @@ struct SWRenderApplication : Application, EventHandler
 	bool subgroup;
 	bool ubershader;
 	bool async_compute;
+	unsigned width;
+	unsigned height;
 };
-
-constexpr unsigned WIDTH = 1920;
-constexpr unsigned HEIGHT = 1080;
 
 void SWRenderApplication::on_device_created(const Vulkan::DeviceCreatedEvent& e)
 {
 	rasterizer_gpu.init(e.get_device(), subgroup, ubershader, async_compute);
-	rasterizer_gpu.resize(WIDTH, HEIGHT);
+	rasterizer_gpu.resize(width, height);
 	rasterizer_gpu.set_rop_state(BlendState::Replace);
 	rasterizer_gpu.set_depth_state(DepthTest::LE, DepthWrite::On);
 	rasterizer_gpu.set_combiner_mode(COMBINER_MODE_TEX_MOD_COLOR | COMBINER_SAMPLE_BIT);
@@ -284,9 +284,9 @@ void SWRenderApplication::begin_dump_frame()
 
 	fwrite("RETROWARP DUMP01", 1, 16, dump_file);
 
-	uint32_t word = WIDTH;
+	uint32_t word = width;
 	fwrite(&word, 1, sizeof(word), dump_file);
-	word = HEIGHT;
+	word = height;
 	fwrite(&word, 1, sizeof(word), dump_file);
 }
 
@@ -327,8 +327,10 @@ void SWRenderApplication::end_dump_frame()
 	dump_file = nullptr;
 }
 
-SWRenderApplication::SWRenderApplication(const std::string &path, bool subgroup_, bool ubershader_, bool async_compute_)
-	: subgroup(subgroup_), ubershader(ubershader_), async_compute(async_compute_)
+SWRenderApplication::SWRenderApplication(const std::string &path, bool subgroup_, bool ubershader_, bool async_compute_,
+                                         unsigned width_, unsigned height_)
+		: subgroup(subgroup_), ubershader(ubershader_), async_compute(async_compute_),
+		  width(width_), height(height_)
 {
 	loader.load_scene(path);
 
@@ -345,9 +347,9 @@ SWRenderApplication::SWRenderApplication(const std::string &path, bool subgroup_
 	cam.set_aspect(640.0f / 360.0f);
 	cam.look_at(vec3(0.0f, 0.0f, 3.0f), vec3(0.0f));
 
-	rop.canvas.resize(WIDTH, HEIGHT);
-	rop.depth_canvas.resize(WIDTH, HEIGHT);
-	rasterizer.set_scissor(0, 0, WIDTH, HEIGHT);
+	rop.canvas.resize(width, height);
+	rop.depth_canvas.resize(width, height);
+	rasterizer.set_scissor(0, 0, width, height);
 	rasterizer.set_rop(&rop);
 
 	EVENT_MANAGER_REGISTER_LATCH(SWRenderApplication, on_device_created, on_device_destroyed, Vulkan::DeviceCreatedEvent);
@@ -392,7 +394,7 @@ void SWRenderApplication::render_frame(double frame_time, double)
 	rasterizer_gpu.clear_depth();
 
 	mat4 vp = cam.get_projection() * cam.get_view();
-	ViewportTransform viewport_transform = { -0.5f, -0.5f, float(WIDTH), float(HEIGHT), 0.0f, 1.0f };
+	ViewportTransform viewport_transform = { -0.5f, -0.5f, float(width), float(height), 0.0f, 1.0f };
 	InputPrimitive input = {};
 	PrimitiveSetup setups[256];
 	TextureSampler sampler;
@@ -522,11 +524,15 @@ Application *application_create(int argc, char **argv)
 	bool subgroup = true;
 	bool async_compute = false;
 	std::string path;
+	unsigned width = 1280;
+	unsigned height = 720;
 
 	Util::CLICallbacks cbs;
 	cbs.add("--ubershader", [&](Util::CLIParser &) { ubershader = true; });
 	cbs.add("--nosubgroup", [&](Util::CLIParser &) { subgroup = false; });
 	cbs.add("--async-compute", [&](Util::CLIParser &) { async_compute = true; });
+	cbs.add("--width", [&](Util::CLIParser &parser) { width = parser.next_uint(); });
+	cbs.add("--height", [&](Util::CLIParser &parser) { height = parser.next_uint(); });
 	cbs.default_handler = [&](const char *arg) { path = arg; };
 	Util::CLIParser parser(std::move(cbs), argc - 1, argv + 1);
 
@@ -537,6 +543,6 @@ Application *application_create(int argc, char **argv)
 	}
 
 	Global::filesystem()->register_protocol("assets", std::make_unique<OSFilesystem>(ASSET_DIRECTORY));
-	return new SWRenderApplication(path, subgroup, ubershader, async_compute);
+	return new SWRenderApplication(path, subgroup, ubershader, async_compute, width, height);
 }
 }
