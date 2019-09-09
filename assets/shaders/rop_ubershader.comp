@@ -172,6 +172,8 @@ void main()
                 rgba *= tex;
                 rgba = clamp(rgba, 0.0, 255.0);
 
+                //rgba = vec4(255.0 * pow(float(current_z) / float(0xffff), 20.0));
+
                 uvec4 urgba = uvec4(round(rgba));
                 rop_blend(urgba, variant);
             }

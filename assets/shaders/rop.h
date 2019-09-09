@@ -97,31 +97,31 @@ bool rop_depth_test(uint z, uint variant)
 
 	case ROP_Z_NEQ:
 		ret = current_z != z;
-		if (z_write)
+		if (ret && z_write)
 			current_z = z;
 		break;
 
 	case ROP_Z_LE:
 		ret = z < current_z;
-		if (z_write)
+		if (ret && z_write)
 			current_z = z;
 		break;
 
 	case ROP_Z_LEQ:
 		ret = z <= current_z;
-		if (z_write)
+		if (ret && z_write)
 			current_z = z;
 		break;
 
 	case ROP_Z_GE:
 		ret = z > current_z;
-		if (z_write)
+		if (ret && z_write)
 			current_z = z;
 		break;
 
 	case ROP_Z_GEQ:
 		ret = z >= current_z;
-		if (z_write)
+		if (ret && z_write)
 			current_z = z;
 		break;
 

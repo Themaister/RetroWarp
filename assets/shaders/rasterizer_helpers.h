@@ -1,6 +1,10 @@
 #ifndef RASTERIZER_HELPERS_H_
 #define RASTERIZER_HELPERS_H_
 
+#ifndef RENDER_STATE_H_
+#error "Must include render_state.h before rasterizer_helpers.h"
+#endif
+
 #include "primitive_setup.h"
 #include "fb_info.h"
 #include "constants.h"

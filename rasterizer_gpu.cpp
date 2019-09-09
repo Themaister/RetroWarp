@@ -176,27 +176,9 @@ struct TileRasterWork
 
 void RasterizerGPU::Impl::reset_staging()
 {
-	staging.positions.reset();
-	staging.attributes.reset();
-	staging.render_state_index.reset();
-	staging.render_state.reset();
-	staging.state_index.reset();
-
-	staging.positions_gpu.reset();
-	staging.attributes_gpu.reset();
-	staging.render_state_index_gpu.reset();
-	staging.render_state_gpu.reset();
-	staging.state_index_gpu.reset();
-
-	staging.mapped_attributes = nullptr;
-	staging.mapped_positions = nullptr;
-	staging.mapped_state_index = nullptr;
-	staging.mapped_render_state = nullptr;
-	staging.mapped_render_state_index = nullptr;
-	staging.count = 0;
+	staging = {};
 	state.render_state_count = 0;
 	state.state_count = 0;
-	staging.num_conservative_tile_instances = 0;
 }
 
 BBox RasterizerGPU::Impl::compute_bbox(const PrimitiveSetup &setup) const
@@ -1029,6 +1011,7 @@ void RasterizerGPU::set_scissor(int x, int y, int width, int height)
 void RasterizerGPU::Impl::queue_primitive(const PrimitiveSetup &setup)
 {
 	unsigned num_conservative_tiles = ubershader ? 0 : compute_num_conservative_tiles(setup);
+	bool state_changed = state.state_count != 0 && state.current_image != state.image_views[state.state_count - 1];
 	bool render_state_changed = memcmp(&state.current_render_state, &state.last_render_state, sizeof(RenderState)) != 0;
 
 	bool need_flush = false;
@@ -1036,7 +1019,7 @@ void RasterizerGPU::Impl::queue_primitive(const PrimitiveSetup &setup)
 		need_flush = true;
 	else if (staging.num_conservative_tile_instances + num_conservative_tiles > MAX_NUM_TILE_INSTANCES)
 		need_flush = true;
-	else if (state.state_count != 0 && state.current_image != state.image_views[state.state_count - 1] && state.state_count == num_state_indices)
+	else if (state_changed && state.state_count == num_state_indices)
 		need_flush = true;
 	else if (render_state_changed && state.render_state_count == MAX_NUM_RENDER_STATE_INDICES)
 		need_flush = true;
@@ -1050,7 +1033,7 @@ void RasterizerGPU::Impl::queue_primitive(const PrimitiveSetup &setup)
 	unsigned current_state;
 	unsigned current_render_state;
 
-	if (state.state_count == 0 || state.current_image != state.image_views[state.state_count - 1])
+	if (state.state_count == 0 || state_changed)
 	{
 		state.image_views[state.state_count] = state.current_image;
 		current_state = state.state_count;
