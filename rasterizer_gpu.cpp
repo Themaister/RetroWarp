@@ -165,8 +165,8 @@ constexpr int TILE_WIDTH_LOG2 = 3;
 constexpr int TILE_HEIGHT_LOG2 = 3;
 constexpr int MAX_TILES_X = MAX_WIDTH / TILE_WIDTH;
 constexpr int MAX_TILES_Y = MAX_HEIGHT / TILE_HEIGHT;
-constexpr int MAX_TILES_X_LOW_RES = MAX_WIDTH / (4 * TILE_WIDTH);
-constexpr int MAX_TILES_Y_LOW_RES = MAX_HEIGHT / (4 * TILE_HEIGHT);
+constexpr int MAX_TILES_X_LOW_RES = MAX_WIDTH / (16 * TILE_WIDTH);
+constexpr int MAX_TILES_Y_LOW_RES = MAX_HEIGHT / (16 * TILE_HEIGHT);
 constexpr int MAX_NUM_TILE_INSTANCES = 0xffff;
 const int RASTER_ROUNDING = (1 << (SUBPIXELS_LOG2 + 16)) - 1;
 
@@ -406,8 +406,8 @@ void RasterizerGPU::Impl::binning_low_res_prepass(CommandBuffer &cmd)
 			cmd.set_subgroup_size_log2(true, trailing_zeroes(subgroup_size), trailing_zeroes(subgroup_size));
 		}
 		cmd.dispatch((staging.count + subgroup_size - 1) / subgroup_size,
-		             (width + 4 * TILE_WIDTH - 1) / (4 * TILE_WIDTH),
-		             (height + 4 * TILE_HEIGHT - 1) / (4 * TILE_HEIGHT));
+		             (width + 16 * TILE_WIDTH - 1) / (16 * TILE_WIDTH),
+		             (height + 16 * TILE_HEIGHT - 1) / (16 * TILE_HEIGHT));
 		cmd.enable_subgroup_size_control(false);
 	}
 	else
@@ -415,8 +415,8 @@ void RasterizerGPU::Impl::binning_low_res_prepass(CommandBuffer &cmd)
 		// Fallback with shared memory.
 		cmd.set_program("assets://shaders/binning_low_res.comp", {{ "SUBGROUP", 0 }});
 		cmd.dispatch((staging.count + 31) / 32,
-		             (width + 4 * TILE_WIDTH - 1) / (4 * TILE_WIDTH),
-		             (height + 4 * TILE_HEIGHT - 1) / (4 * TILE_HEIGHT));
+		             (width + 16 * TILE_WIDTH - 1) / (16 * TILE_WIDTH),
+		             (height + 16 * TILE_HEIGHT - 1) / (16 * TILE_HEIGHT));
 	}
 	cmd.end_region();
 }
