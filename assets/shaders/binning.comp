@@ -78,7 +78,7 @@ void main()
     uint local_index = gl_LocalInvocationIndex;
 #endif
 
-    uint local_tile_x = local_index & (PER_WAVE_TILES_X - 1u);
+    uint local_tile_x = local_index % PER_WAVE_TILES_X;
     uint local_tile_y = local_index / PER_WAVE_TILES_X;
     ivec2 tile = ivec2(gl_WorkGroupID.yz) * ivec2(PER_WAVE_TILES_X, PER_WAVE_TILES_Y) + ivec2(local_tile_x, local_tile_y);
     int linear_tile = tile.y * MAX_TILES_X + tile.x;
@@ -93,7 +93,6 @@ void main()
     // Wave uniform loop.
     while (mask_index < mask_end)
     {
-        group_binned <<= 1u;
         int linear_tile_lowres = (tile.y >> TILE_DOWNSAMPLE_LOG2) * MAX_TILES_X_LOW_RES + (tile.x >> TILE_DOWNSAMPLE_LOG2);
 #if SUBGROUP
         // Mark as a wave uniform expression.
@@ -116,6 +115,7 @@ void main()
         }
 
         binned_bitmask[linear_tile * TILE_BINNING_STRIDE + mask_index] = binned;
+        group_binned <<= 1u;
         if (binned != 0u)
             group_binned |= 1u;
 

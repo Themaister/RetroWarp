@@ -470,6 +470,7 @@ void SWRenderApplication::render_frame(double frame_time, double)
 	else
 		LOGI("Cached %u primitive setups!\n", unsigned(setup_cache.size()));
 
+#if 0
 	for (auto &setup : setup_cache)
 	{
 		if (queue_dump_frame)
@@ -499,6 +500,40 @@ void SWRenderApplication::render_frame(double frame_time, double)
 		if (queue_dump_frame)
 			dump_primitives(&setup.setup, 1);
 	}
+#else
+	for (unsigned i = 0; i < 64; i++)
+	{
+		InputPrimitive prim = {};
+		prim.vertices[0].x = -0.5f + i / 200.0f;
+		prim.vertices[0].y = -0.5f + i / 200.0f;
+		prim.vertices[1].x = -0.5f + i / 200.0f;
+		prim.vertices[1].y = +0.5f + i / 200.0f;
+		prim.vertices[2].x = +0.5f + i / 200.0f;
+		prim.vertices[2].y = -0.5f + i / 200.0f;
+		prim.vertices[0].w = 1.0f;
+		prim.vertices[1].w = 1.0f;
+		prim.vertices[2].w = 1.0f;
+		prim.vertices[0].z = i / 64.0f;
+		prim.vertices[1].z = i / 64.0f;
+		prim.vertices[2].z = i / 64.0f;
+		if (i & 1)
+		{
+			prim.vertices[0].color[0] = 1.0f;
+			prim.vertices[1].color[1] = 1.0f;
+			prim.vertices[2].color[2] = 1.0f;
+		}
+		else
+		{
+			prim.vertices[0].color[2] = 1.0f;
+			prim.vertices[1].color[1] = 1.0f;
+			prim.vertices[2].color[0] = 1.0f;
+		}
+		rasterizer_gpu.set_texture(*setup_cache.front().view);
+		rasterizer_gpu.set_combiner_mode(COMBINER_MODE_COLOR);
+		unsigned count = setup_clipped_triangles(setups, prim, CullMode::None, viewport_transform);
+		rasterizer_gpu.rasterize_primitives(setups, count);
+	}
+#endif
 
 	auto image_gpu = rasterizer_gpu.copy_to_framebuffer();
 
