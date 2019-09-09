@@ -9,11 +9,11 @@
 #extension GL_KHR_shader_subgroup_arithmetic : require
 layout(local_size_x_id = 0) in;
 #else
-layout(local_size_x = 32) in;
+layout(local_size_x = 512) in;
 #endif
 
 layout(constant_id = 1) const uint PER_WAVE_TILES_X = 8u;
-const uint PER_WAVE_TILES_Y = gl_WorkGroupSize.x / PER_WAVE_TILES_X;
+layout(constant_id = 2) const uint PER_WAVE_TILES_Y = 4u;
 
 layout(std430, set = 0, binding = 0) writeonly buffer TileBitmask
 {
@@ -66,6 +66,8 @@ layout(std430, set = 0, binding = 9) uniform StateIndex
 };
 #endif
 
+shared uint shared_group_binning[16][PER_WAVE_TILES_Y][PER_WAVE_TILES_X];
+
 void main()
 {
 #if SUBGROUP
@@ -74,19 +76,21 @@ void main()
     uint local_index = gl_LocalInvocationIndex;
 #endif
 
-    uint local_tile_x = local_index % PER_WAVE_TILES_X;
-    uint local_tile_y = local_index / PER_WAVE_TILES_X;
+    uint local_tile_x = local_index & (PER_WAVE_TILES_X - 1u);
+    uint local_tile_y = (local_index / PER_WAVE_TILES_X) & (PER_WAVE_TILES_Y - 1u);
     ivec2 tile = ivec2(gl_WorkGroupID.yz) * ivec2(PER_WAVE_TILES_X, PER_WAVE_TILES_Y) + ivec2(local_tile_x, local_tile_y);
     int linear_tile = tile.y * MAX_TILES_X + tile.x;
 
     ivec2 base_coord = tile * ivec2(TILE_WIDTH, TILE_HEIGHT);
     ivec2 end_coord = min(base_coord + ivec2(TILE_WIDTH, TILE_HEIGHT), ivec2(fb_info.resolution));
-    int mask_index = 32 * int(gl_WorkGroupID.x);
+
+    int local_index_y = int(local_index / (PER_WAVE_TILES_X * PER_WAVE_TILES_Y));
+    int mask_index = 32 * int(gl_WorkGroupID.x) + 2 * local_index_y;
 
     uint group_binned = 0u;
-    int mask_end = min(mask_index + 32, fb_info.primitive_count_32);
+    int mask_end = min(mask_index + 2, fb_info.primitive_count_32);
 
-    uint group_binned_mask = 1u;
+    uint group_binned_mask = 1u << (2u * local_index_y);
 
     // Wave uniform loop.
     while (mask_index < mask_end)
@@ -187,6 +191,23 @@ void main()
         mask_index++;
     }
 
-    uint binned_bitmask_offset = uint(TILE_BINNING_STRIDE_COARSE * linear_tile);
-    binned_bitmask_coarse[binned_bitmask_offset + gl_WorkGroupID.x] = group_binned;
+    // Need to merge group mask here across the 16 slices, each slice worked on 2 bits.
+    shared_group_binning[local_index_y][local_tile_y][local_tile_x] = group_binned;
+    barrier();
+    if (local_index_y < 8u)
+        shared_group_binning[local_index_y][local_tile_y][local_tile_x] |= shared_group_binning[local_index_y + 8u][local_tile_y][local_tile_x];
+    barrier();
+    if (local_index_y < 4u)
+        shared_group_binning[local_index_y][local_tile_y][local_tile_x] |= shared_group_binning[local_index_y + 4u][local_tile_y][local_tile_x];
+    barrier();
+    if (local_index_y < 2u)
+        shared_group_binning[local_index_y][local_tile_y][local_tile_x] |= shared_group_binning[local_index_y + 2u][local_tile_y][local_tile_x];
+    barrier();
+
+    if (local_index_y == 0u)
+    {
+        uint binned_bitmask_offset = uint(TILE_BINNING_STRIDE_COARSE * linear_tile);
+        uint group_binned = shared_group_binning[0][local_tile_y][local_tile_x] | shared_group_binning[1][local_tile_y][local_tile_x];
+        binned_bitmask_coarse[binned_bitmask_offset + gl_WorkGroupID.x] = group_binned;
+    }
 }

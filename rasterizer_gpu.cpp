@@ -458,12 +458,13 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd, bool ubershader)
 	    can_support_minimum_subgroup_size(TILE_DOWNSAMPLE))
 	{
 		cmd.set_program("assets://shaders/binning.comp", {{ "SUBGROUP", 1 }, { "UBERSHADER", ubershader ? 1 : 0 }});
-		cmd.set_specialization_constant_mask(3);
-		cmd.set_specialization_constant(0, subgroup_size);
+		cmd.set_specialization_constant_mask(7);
+		cmd.set_specialization_constant(0, subgroup_size * 16);
 
 		uint32_t subgroup_tiles_x = TILE_DOWNSAMPLE;
 		uint32_t subgroup_tiles_y = subgroup_size / TILE_DOWNSAMPLE;
-		cmd.set_specialization_constant(1, TILE_DOWNSAMPLE);
+		cmd.set_specialization_constant(1, subgroup_tiles_x);
+		cmd.set_specialization_constant(2, subgroup_tiles_y);
 
 		if (supports_subgroup_size_control())
 		{
