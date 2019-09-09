@@ -249,6 +249,7 @@ int main(int argc, char **argv)
 	RasterizerGPU rasterizer;
 	rasterizer.init(device, subgroup, ubershader, async_compute);
 	rasterizer.resize(width, height);
+	rasterizer.set_depth_state(DepthTest::LE, DepthWrite::On);
 
 	auto start_run = Util::get_current_time_nsecs();
 	for (unsigned i = 0; i < 1000; i++)
