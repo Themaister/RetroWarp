@@ -18,6 +18,8 @@ layout(local_size_x = 256) in;
 layout(local_size_x = 256) in;
 #endif
 
+#include "combiner.h"
+
 #define RENDER_STATE_INDEX_BUFFER 7
 #define RENDER_STATE_BUFFER 8
 #include "rop.h"
@@ -139,42 +141,48 @@ void main()
                 if (!has_coverage)
                     continue;
 
+                uint render_variant = uint(render_state_indices[primitive_index]);
+
+                uvec4 tex = uvec4(0);
+                uint combiner_state = uint(render_states[render_variant].combiner_state);
+                if ((combiner_state & COMBINER_SAMPLE_BIT) != 0u)
+                {
+#if SUBGROUP
+                    float dudx = abs(f_uv_horiz.x - f_uv.x);
+                    float dudy = abs(f_uv_vert.x - f_uv.x);
+                    float dvdx = abs(f_uv_horiz.y - f_uv.y);
+                    float dvdy = abs(f_uv_vert.y - f_uv.y);
+                    float f_width = max(dudx + dudy, dudx + dudy);
+#elif !defined(DERIVATIVE_GROUP_LINEAR) && !defined(DERIVATIVE_GROUP_QUAD)
+                    float dudx = abs(shared_u[local_index ^ 1u] - f_uv.x);
+                    float dudy = abs(shared_u[local_index ^ 2u] - f_uv.x);
+                    float dvdx = abs(shared_v[local_index ^ 1u] - f_uv.y);
+                    float dvdy = abs(shared_v[local_index ^ 2u] - f_uv.y);
+                    float f_width = max(dudx + dudy, dudx + dudy);
+#endif
+
+                    f_width = max(f_width, 1.0);
+                    float f_lod = log2(f_width);
+                    f_uv /= vec2(textureSize(uTextures[tex_index], 0));
+                    tex = uvec4(round(255.0 * textureLod(uTextures[tex_index], f_uv, f_lod)));
+                }
+
+                if (tex.a < uint(render_states[render_variant].alpha_threshold))
+                    continue;
+
                 uint variant = get_rop_state_variant(int(primitive_index));
                 uint z = interpolate_z(primitive_index, x, y, interpolation_base);
                 if (!rop_depth_test(z, variant))
                     continue;
 
-#if SUBGROUP
-                float dudx = abs(f_uv_horiz.x - f_uv.x);
-                float dudy = abs(f_uv_vert.x - f_uv.x);
-                float dvdx = abs(f_uv_horiz.y - f_uv.y);
-                float dvdy = abs(f_uv_vert.y - f_uv.y);
-                float f_width = max(dudx + dudy, dudx + dudy);
-#elif !defined(DERIVATIVE_GROUP_LINEAR) && !defined(DERIVATIVE_GROUP_QUAD)
-                float dudx = abs(shared_u[local_index ^ 1u] - f_uv.x);
-                float dudy = abs(shared_u[local_index ^ 2u] - f_uv.x);
-                float dvdx = abs(shared_v[local_index ^ 1u] - f_uv.y);
-                float dvdy = abs(shared_v[local_index ^ 2u] - f_uv.y);
-                float f_width = max(dudx + dudy, dudx + dudy);
-#endif
-
-                f_width = max(f_width, 1.0);
-                float f_lod = log2(f_width);
-                f_uv /= vec2(textureSize(uTextures[tex_index], 0));
-                vec4 tex = textureLod(uTextures[tex_index], f_uv, f_lod);
-
-                if (tex.w < 0.5)
-                    continue;
-
                 // We've passed the rasterization test. Interpolate colors, Z, 1/W.
                 vec4 rgba = interpolate_rgba(primitive_index, bary);
-
-                rgba *= tex;
                 rgba = clamp(rgba, 0.0, 255.0);
+                uvec4 urgba = uvec4(round(rgba));
+                urgba = combine_result(tex, urgba, uvec4(render_states[render_variant].constant_color), combiner_state);
 
                 //rgba = vec4(255.0 * pow(float(current_z) / float(0xffff), 20.0));
 
-                uvec4 urgba = uvec4(round(rgba));
                 rop_blend(urgba, variant);
             }
         }

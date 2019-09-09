@@ -35,6 +35,17 @@ enum class BlendState : uint8_t
 	Subtract = 3
 };
 
+enum CombinerState
+{
+	COMBINER_SAMPLE_BIT = 0x80,
+	COMBINER_ADD_CONSTANT_BIT = 0x40,
+	COMBINER_MODE_TEX_MOD_COLOR = 0,
+	COMBINER_MODE_TEX = 1,
+	COMBINER_MODE_COLOR = 2,
+	COMBINER_MODE_MASK = 0x3f
+};
+using CombinerFlags = uint8_t;
+
 class RasterizerGPU
 {
 public:
@@ -46,6 +57,9 @@ public:
 	void set_depth_state(DepthTest mode, DepthWrite write);
 	void set_rop_state(BlendState state);
 	void set_scissor(int x, int y, int width, int height);
+	void set_alpha_threshold(uint8_t threshold);
+	void set_constant_color(uint8_t r, uint8_t g, uint8_t b, uint8_t a);
+	void set_combiner_mode(CombinerFlags flags);
 
 	void resize(unsigned width, unsigned height);
 	void clear_depth(uint16_t z = 0xffff);

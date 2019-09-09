@@ -248,6 +248,7 @@ struct SWRenderApplication : Application, EventHandler
 		unsigned index;
 		const Vulkan::ImageView *view;
 		PrimitiveSetup setup;
+		DrawPipeline pipeline;
 	};
 	std::vector<Cached> setup_cache;
 	bool update_setup_cache = true;
@@ -265,6 +266,7 @@ void SWRenderApplication::on_device_created(const Vulkan::DeviceCreatedEvent& e)
 	rasterizer_gpu.resize(WIDTH, HEIGHT);
 	rasterizer_gpu.set_rop_state(BlendState::Replace);
 	rasterizer_gpu.set_depth_state(DepthTest::LE, DepthWrite::On);
+	rasterizer_gpu.set_combiner_mode(COMBINER_MODE_TEX_MOD_COLOR | COMBINER_SAMPLE_BIT);
 }
 
 void SWRenderApplication::on_device_destroyed(const Vulkan::DeviceCreatedEvent &)
@@ -374,7 +376,7 @@ static void transform_vertex(Vertex &out_vertex, const Vertex &in_vertex, const 
 	out_vertex.color[0] = ndotl;
 	out_vertex.color[1] = ndotl;
 	out_vertex.color[2] = ndotl;
-	out_vertex.color[3] = 0.5f;
+	out_vertex.color[3] = 1.0f;
 	memcpy(out_vertex.clip, clip.data, 4 * sizeof(float));
 }
 
@@ -432,6 +434,10 @@ void SWRenderApplication::render_frame(double frame_time, double)
 			if (!static_mesh)
 				continue;
 
+			auto two_sided = static_mesh->material->two_sided;
+			//bool two_sided = false;
+			auto pipeline = static_mesh->material->pipeline;
+
 			size_t vertex_count = sw->vertices.size();
 			for (size_t i = 0; i < vertex_count; i++)
 				transform_vertex(sw->transformed_vertices[i], sw->vertices[i], mvp, n);
@@ -441,9 +447,21 @@ void SWRenderApplication::render_frame(double frame_time, double)
 				input.vertices[0] = sw->transformed_vertices[primitive.x];
 				input.vertices[1] = sw->transformed_vertices[primitive.y];
 				input.vertices[2] = sw->transformed_vertices[primitive.z];
-				unsigned count = setup_clipped_triangles(setups, input, CullMode::CCWOnly, viewport_transform);
+
+				unsigned count = setup_clipped_triangles(setups, input,
+				                                         two_sided ? CullMode::None : CullMode::CCWOnly,
+				                                         viewport_transform);
+
 				for (unsigned i = 0; i < count; i++)
-					setup_cache.push_back({ sw->state_index, &static_mesh->material->textures[Util::ecast(Material::Textures::BaseColor)]->get_image()->get_view(), setups[i] });
+				{
+					setup_cache.push_back({
+							                      sw->state_index,
+							                      &static_mesh->material->textures[Util::ecast(
+									                      Material::Textures::BaseColor)]->get_image()->get_view(),
+							                      setups[i],
+							                      pipeline,
+					                      });
+				}
 			}
 		}
 	}
@@ -454,6 +472,25 @@ void SWRenderApplication::render_frame(double frame_time, double)
 	{
 		if (queue_dump_frame)
 			dump_set_texture(setup.index);
+
+		auto pipeline = setup.pipeline;
+		switch (pipeline)
+		{
+		case DrawPipeline::Opaque:
+			rasterizer_gpu.set_alpha_threshold(0);
+			rasterizer_gpu.set_rop_state(BlendState::Replace);
+			break;
+
+		case DrawPipeline::AlphaTest:
+			rasterizer_gpu.set_alpha_threshold(128);
+			rasterizer_gpu.set_rop_state(BlendState::Replace);
+			break;
+
+		case DrawPipeline::AlphaBlend:
+			rasterizer_gpu.set_alpha_threshold(0);
+			rasterizer_gpu.set_rop_state(BlendState::Alpha);
+			break;
+		}
 
 		rasterizer_gpu.set_texture(*setup.view);
 		rasterizer_gpu.rasterize_primitives(&setup.setup, 1);

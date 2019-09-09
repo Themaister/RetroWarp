@@ -61,12 +61,15 @@ struct RasterizerGPU::Impl
 
 	struct RenderState
 	{
-		alignas(8) int16_t scissor_x = 0;
+		int16_t scissor_x = 0;
 		int16_t scissor_y = 0;
 		int16_t scissor_width = 0;
 		int16_t scissor_height = 0;
+		uint8_t constant_color[4] = {};
 		uint8_t depth_state = uint8_t(DepthWrite::On);
 		uint8_t blend_state = uint8_t(BlendState::Replace);
+		uint8_t combiner_state = 0;
+		uint8_t alpha_threshold = 0;
 	};
 	static_assert(sizeof(RenderState) == 16, "Sizeof render state must be 16.");
 
@@ -1144,8 +1147,24 @@ void RasterizerGPU::Impl::flush()
 		flush_split();
 
 	reset_staging();
-	if (width && height)
-		copy_to_framebuffer();
+}
+
+void RasterizerGPU::set_constant_color(uint8_t r, uint8_t g, uint8_t b, uint8_t a)
+{
+	impl->state.current_render_state.constant_color[0] = r;
+	impl->state.current_render_state.constant_color[1] = g;
+	impl->state.current_render_state.constant_color[2] = b;
+	impl->state.current_render_state.constant_color[3] = a;
+}
+
+void RasterizerGPU::set_alpha_threshold(uint8_t threshold)
+{
+	impl->state.current_render_state.alpha_threshold = threshold;
+}
+
+void RasterizerGPU::set_combiner_mode(CombinerFlags flags)
+{
+	impl->state.current_render_state.combiner_state = flags;
 }
 
 }

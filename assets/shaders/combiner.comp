@@ -18,6 +18,8 @@ layout(local_size_x = 256) in;
 layout(local_size_x = 256) in;
 #endif
 
+#include "combiner.h"
+
 #define RENDER_STATE_INDEX_BUFFER 6
 #define RENDER_STATE_BUFFER 7
 #include "render_state.h"
@@ -132,26 +134,34 @@ void main()
         return;
     }
 
+    uint variant = uint(render_state_indices[primitive_index]);
+    uint combiner_state = uint(render_states[variant].combiner_state);
+
+    uvec4 tex = uvec4(0);
+    if ((combiner_state & COMBINER_SAMPLE_BIT) != 0u)
+    {
 #if SUBGROUP
-    float dudx = abs(f_uv_horiz.x - f_uv.x);
-    float dudy = abs(f_uv_vert.x - f_uv.x);
-    float dvdx = abs(f_uv_horiz.y - f_uv.y);
-    float dvdy = abs(f_uv_vert.y - f_uv.y);
-    float f_width = max(dudx + dudy, dudx + dudy);
+        float dudx = abs(f_uv_horiz.x - f_uv.x);
+        float dudy = abs(f_uv_vert.x - f_uv.x);
+        float dvdx = abs(f_uv_horiz.y - f_uv.y);
+        float dvdy = abs(f_uv_vert.y - f_uv.y);
+        float f_width = max(dudx + dudy, dudx + dudy);
 #elif !defined(DERIVATIVE_GROUP_LINEAR) && !defined(DERIVATIVE_GROUP_QUAD)
-    float dudx = abs(shared_u[local_index ^ 1u] - f_uv.x);
-    float dudy = abs(shared_u[local_index ^ 2u] - f_uv.x);
-    float dvdx = abs(shared_v[local_index ^ 1u] - f_uv.y);
-    float dvdy = abs(shared_v[local_index ^ 2u] - f_uv.y);
-    float f_width = max(dudx + dudy, dudx + dudy);
+        float dudx = abs(shared_u[local_index ^ 1u] - f_uv.x);
+        float dudy = abs(shared_u[local_index ^ 2u] - f_uv.x);
+        float dvdx = abs(shared_v[local_index ^ 1u] - f_uv.y);
+        float dvdy = abs(shared_v[local_index ^ 2u] - f_uv.y);
+        float f_width = max(dudx + dudy, dudx + dudy);
 #endif
 
-    f_width = max(f_width, 1.0);
-    float f_lod = log2(f_width);
-    f_uv /= textureSize(uTexture, 0).xy;
-    vec4 tex = textureLod(uTexture, f_uv, f_lod);
+        f_width = max(f_width, 1.0);
+        float f_lod = log2(f_width);
+        f_uv /= textureSize(uTexture, 0).xy;
+        tex = uvec4(round(255.0 * textureLod(uTexture, f_uv, f_lod)));
+    }
 
-    if (tex.w < 0.5)
+    uint alpha = uint(round(255.0 * clamp(tex.a, 0.0, 1.0)));
+    if (alpha < uint(render_states[variant].alpha_threshold))
     {
         flag_tiles[tile_instance_index].flag[local_pixel] = uint8_t(0);
         return;
@@ -159,12 +169,12 @@ void main()
 
     // We've passed the rasterization test. Interpolate colors, Z, 1/W.
     vec4 rgba = interpolate_rgba(primitive_index, bary);
-
-    rgba *= tex;
     rgba = clamp(rgba, 0.0, 255.0);
+    uvec4 urgba = uvec4(round(rgba));
+    urgba = combine_result(tex, urgba, uvec4(render_states[variant].constant_color), combiner_state);
+
     uint z = interpolate_z(primitive_index, x, y, interpolation_base);
 
-    uvec4 urgba = uvec4(round(rgba));
     color_tiles[tile_instance_index].color[local_pixel] = u8vec4(urgba);
     depth_tiles[tile_instance_index].depth[local_pixel] = uint16_t(z);
     flag_tiles[tile_instance_index].flag[local_pixel] = uint8_t(1);
