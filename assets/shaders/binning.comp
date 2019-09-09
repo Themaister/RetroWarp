@@ -14,6 +14,8 @@ layout(local_size_x = 512) in;
 
 layout(constant_id = 1) const uint PER_WAVE_TILES_X = 8u;
 layout(constant_id = 2) const uint PER_WAVE_TILES_Y = 4u;
+layout(constant_id = 3) const uint NUM_SLICES = 16u;
+const uint BITS_PER_SLICE = 32u / NUM_SLICES;
 
 layout(std430, set = 0, binding = 0) writeonly buffer TileBitmask
 {
@@ -66,7 +68,7 @@ layout(std430, set = 0, binding = 9) uniform StateIndex
 };
 #endif
 
-shared uint shared_group_binning[16][PER_WAVE_TILES_Y][PER_WAVE_TILES_X];
+shared uint shared_group_binning[NUM_SLICES][PER_WAVE_TILES_Y][PER_WAVE_TILES_X];
 
 void main()
 {
@@ -85,12 +87,12 @@ void main()
     ivec2 end_coord = min(base_coord + ivec2(TILE_WIDTH, TILE_HEIGHT), ivec2(fb_info.resolution));
 
     int local_index_y = int(local_index / (PER_WAVE_TILES_X * PER_WAVE_TILES_Y));
-    int mask_index = 32 * int(gl_WorkGroupID.x) + 2 * local_index_y;
+    int mask_index = 32 * int(gl_WorkGroupID.x) + int(BITS_PER_SLICE) * local_index_y;
 
     uint group_binned = 0u;
-    int mask_end = min(mask_index + 2, fb_info.primitive_count_32);
+    int mask_end = min(mask_index + int(BITS_PER_SLICE), fb_info.primitive_count_32);
 
-    uint group_binned_mask = 1u << (2u * local_index_y);
+    uint group_binned_mask = 1u << (BITS_PER_SLICE * local_index_y);
 
     // Wave uniform loop.
     while (mask_index < mask_end)
@@ -194,15 +196,14 @@ void main()
     // Need to merge group mask here across the 16 slices, each slice worked on 2 bits.
     shared_group_binning[local_index_y][local_tile_y][local_tile_x] = group_binned;
     barrier();
-    if (local_index_y < 8u)
-        shared_group_binning[local_index_y][local_tile_y][local_tile_x] |= shared_group_binning[local_index_y + 8u][local_tile_y][local_tile_x];
-    barrier();
-    if (local_index_y < 4u)
-        shared_group_binning[local_index_y][local_tile_y][local_tile_x] |= shared_group_binning[local_index_y + 4u][local_tile_y][local_tile_x];
-    barrier();
-    if (local_index_y < 2u)
-        shared_group_binning[local_index_y][local_tile_y][local_tile_x] |= shared_group_binning[local_index_y + 2u][local_tile_y][local_tile_x];
-    barrier();
+
+    uint step = NUM_SLICES >> 1u;
+    for (uint step = NUM_SLICES >> 1u; step >= 2u; step >>= 1u)
+    {
+        if (local_index_y < step)
+            shared_group_binning[local_index_y][local_tile_y][local_tile_x] |= shared_group_binning[local_index_y + step][local_tile_y][local_tile_x];
+        barrier();
+    }
 
     if (local_index_y == 0u)
     {
