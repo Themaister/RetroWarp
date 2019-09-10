@@ -531,7 +531,7 @@ void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 	                                        VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
 	                                        VK_SUBGROUP_FEATURE_BALLOT_BIT;
 
-	if (features.compute_shader_derivative_features.computeDerivativeGroupQuads)
+	if (subgroup && features.compute_shader_derivative_features.computeDerivativeGroupQuads)
 	{
 		cmd.set_program("assets://shaders/combiner.comp", {
 			{"DERIVATIVE_GROUP_QUAD", 1},
@@ -540,7 +540,7 @@ void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 			{"TILE_SIZE_SQUARE", tile_size * tile_size},
 		});
 	}
-	else if (features.compute_shader_derivative_features.computeDerivativeGroupLinear)
+	else if (subgroup && features.compute_shader_derivative_features.computeDerivativeGroupLinear)
 	{
 		cmd.set_program("assets://shaders/combiner.comp", {
 				{"DERIVATIVE_GROUP_LINEAR", 1},
@@ -625,7 +625,7 @@ void RasterizerGPU::Impl::run_rop_ubershader(CommandBuffer &cmd)
 	                                        VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
 	                                        VK_SUBGROUP_FEATURE_BALLOT_BIT;
 
-	if (features.compute_shader_derivative_features.computeDerivativeGroupQuads)
+	if (subgroup && features.compute_shader_derivative_features.computeDerivativeGroupQuads)
 	{
 		cmd.set_program("assets://shaders/rop_ubershader.comp", {
 			{"DERIVATIVE_GROUP_QUAD", 1},
@@ -634,7 +634,7 @@ void RasterizerGPU::Impl::run_rop_ubershader(CommandBuffer &cmd)
 			{"TILE_SIZE_SQUARE", tile_size * tile_size},
 		});
 	}
-	else if (features.compute_shader_derivative_features.computeDerivativeGroupLinear)
+	else if (subgroup && features.compute_shader_derivative_features.computeDerivativeGroupLinear)
 	{
 		cmd.set_program("assets://shaders/rop_ubershader.comp", {
 				{"DERIVATIVE_GROUP_LINEAR", 1},
