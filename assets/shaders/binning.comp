@@ -9,13 +9,8 @@
 #extension GL_KHR_shader_subgroup_arithmetic : require
 layout(local_size_x_id = 0) in;
 #else
-layout(local_size_x = 512) in;
+layout(local_size_x = 32) in;
 #endif
-
-layout(constant_id = 1) const uint PER_WAVE_TILES_X = 8u;
-layout(constant_id = 2) const uint PER_WAVE_TILES_Y = 4u;
-layout(constant_id = 3) const uint NUM_SLICES = 16u;
-const uint BITS_PER_SLICE = 32u / NUM_SLICES;
 
 layout(std430, set = 0, binding = 0) writeonly buffer TileBitmask
 {
@@ -62,56 +57,69 @@ layout(std430, set = 0, binding = 8) writeonly buffer WorkList
     u16vec4 tile_raster_work[];
 };
 
-layout(std430, set = 0, binding = 9) uniform StateIndex
+layout(std430, set = 0, binding = 9) readonly buffer StateIndex
 {
-    uint8_t state_indices[MAX_PRIMITIVES];
+    uint8_t state_indices[];
 };
 #endif
 
-shared uint shared_group_binning[NUM_SLICES][PER_WAVE_TILES_Y][PER_WAVE_TILES_X];
+#if !SUBGROUP
+shared uint merged_mask;
+#endif
+
+#if !UBERSHADER
+uint allocate_work_offset(uint variant_index)
+{
+#if !SUBGROUP
+    return atomicAdd(item_counts_per_variant[variant_index].x, 1u);
+#else
+    // Merge atomic operations.
+    bool work_to_do = true;
+    uint res;
+    do
+    {
+        if (subgroupBroadcastFirst(variant_index) == variant_index)
+        {
+            uvec4 active_mask = subgroupBallot(true);
+            uint count = subgroupBallotBitCount(active_mask);
+            uint work_offset = 0u;
+            if (subgroupElect())
+            work_offset = atomicAdd(item_counts_per_variant[variant_index].x, count);
+
+            work_offset = subgroupBroadcastFirst(work_offset);
+            work_offset += subgroupBallotExclusiveBitCount(active_mask);
+            res = work_offset;
+            work_to_do = false;
+        }
+    } while(work_to_do);
+    return res;
+#endif
+}
+#endif
 
 void main()
 {
-#if SUBGROUP
-    uint local_index = gl_SubgroupInvocationID + gl_SubgroupID * gl_SubgroupSize;
-#else
-    uint local_index = gl_LocalInvocationIndex;
-#endif
-
-    uint local_tile_x = local_index & (PER_WAVE_TILES_X - 1u);
-    uint local_tile_y = (local_index / PER_WAVE_TILES_X) & (PER_WAVE_TILES_Y - 1u);
-    ivec2 tile = ivec2(gl_WorkGroupID.yz) * ivec2(PER_WAVE_TILES_X, PER_WAVE_TILES_Y) + ivec2(local_tile_x, local_tile_y);
-    int linear_tile = tile.y * MAX_TILES_X + tile.x;
-
+    ivec2 tile = ivec2(gl_WorkGroupID.yz);
     ivec2 base_coord = tile * ivec2(TILE_WIDTH, TILE_HEIGHT);
     ivec2 end_coord = min(base_coord + ivec2(TILE_WIDTH, TILE_HEIGHT), ivec2(fb_info.resolution));
 
-    int local_index_y = int(local_index / (PER_WAVE_TILES_X * PER_WAVE_TILES_Y));
+    int linear_tile = tile.y * MAX_TILES_X + tile.x;
 #if SUBGROUP
-    int mask_index = subgroupBroadcastFirst(32 * int(gl_WorkGroupID.x) + int(BITS_PER_SLICE) * local_index_y);
+    uint local_index = gl_SubgroupInvocationID;
+    int mask_index = int(gl_SubgroupInvocationID + gl_SubgroupID * gl_SubgroupSize + gl_WorkGroupID.x * gl_WorkGroupSize.x);
 #else
-    int mask_index = 32 * int(gl_WorkGroupID.x) + int(BITS_PER_SLICE) * local_index_y;
+    uint local_index = gl_LocalInvocationIndex;
+    int mask_index = int(gl_GlobalInvocationID.x);
 #endif
 
-    uint group_binned = 0u;
-    int mask_end = min(mask_index + int(BITS_PER_SLICE), fb_info.primitive_count_32);
-
-    uint group_binned_mask = 1u << (BITS_PER_SLICE * local_index_y);
-
-    // Wave uniform loop.
-    while (mask_index < mask_end)
+    bool group_bin_to_tile = false;
+    uint binned = 0u;
+    if (mask_index < fb_info.primitive_count_32)
     {
         int linear_tile_lowres = (tile.y >> TILE_DOWNSAMPLE_LOG2) * MAX_TILES_X_LOW_RES + (tile.x >> TILE_DOWNSAMPLE_LOG2);
-#if SUBGROUP
-        // Mark as a wave uniform expression.
-        int binned_bitmask_offset = subgroupBroadcastFirst(linear_tile_lowres * TILE_BINNING_STRIDE + mask_index);
-#else
         int binned_bitmask_offset = linear_tile_lowres * TILE_BINNING_STRIDE + mask_index;
-#endif
-        uint low_res_binned = binned_bitmask_low_res[binned_bitmask_offset];
-        uint binned = 0u;
 
-        // Wave uniform loop.
+        uint low_res_binned = binned_bitmask_low_res[binned_bitmask_offset];
         while (low_res_binned != 0u)
         {
             int i = findLSB(low_res_binned);
@@ -123,96 +131,77 @@ void main()
         }
 
         binned_bitmask[linear_tile * TILE_BINNING_STRIDE + mask_index] = binned;
-        if (binned != 0u)
-            group_binned |= group_binned_mask;
-        group_binned_mask <<= 1u;
-
-#if !UBERSHADER
-        // Allocate instance offsets per mask.
-        uint bit_count = uint(bitCount(binned));
+        group_bin_to_tile = binned != 0u;
+    }
 
 #if SUBGROUP
-        uint total_bit_count = subgroupAdd(bit_count);
-        uint instance_offset = 0u;
-        if (subgroupElect())
-        {
-            if (total_bit_count != 0u)
-                instance_offset = atomicAdd(item_counts_per_variant[0].w, total_bit_count);
-        }
-        instance_offset = subgroupBroadcastFirst(instance_offset);
-        instance_offset += subgroupInclusiveAdd(bit_count) - bit_count;
-        tile_instance_offset[linear_tile * TILE_BINNING_STRIDE + mask_index] = uint16_t(instance_offset);
-
-        // As a subgroup, we figure out how many work instances we need to create per primitive.
-        uint overall_binned = subgroupOr(binned);
-        // Wave uniform loop.
-        while (overall_binned != 0u)
-        {
-            int i = findLSB(overall_binned);
-            overall_binned &= ~uint(1 << i);
-            int primitive_index = i + mask_index * 32;
-
-            bool is_binned = (binned & (1u << uint(i))) != 0u;
-            uvec4 primitive_ballot = subgroupBallot(is_binned);
-            uint allocate_count = subgroupBallotBitCount(primitive_ballot);
-            uint bit_offset = subgroupBallotExclusiveBitCount(primitive_ballot);
-
-            uint variant_index = uint(state_indices[primitive_index]);
-            uint work_offsets = 0u;
-            if (subgroupElect())
-            {
-                if (allocate_count != 0u)
-                    work_offsets = atomicAdd(item_counts_per_variant[variant_index].x, allocate_count);
-            }
-
-            work_offsets = subgroupBroadcastFirst(work_offsets) + bit_offset;
-            if (is_binned)
-            {
-                tile_raster_work[work_offsets + uint(TILE_INSTANCE_STRIDE) * variant_index] =
-                    u16vec4(uvec4(tile.x, tile.y, instance_offset, primitive_index));
-                instance_offset++;
-            }
-        }
-#else
-        uint instance_offset = 0u;
-        if (bit_count != 0u)
-            instance_offset = atomicAdd(item_counts_per_variant[0].w, bit_count);
-        tile_instance_offset[linear_tile * TILE_BINNING_STRIDE + mask_index] = uint16_t(instance_offset);
-
-        while (binned != 0u)
-        {
-            int i = findLSB(binned);
-            binned &= ~uint(1 << i);
-            int primitive_index = i + mask_index * 32;
-            uint variant_index = uint(state_indices[primitive_index]);
-            uint work_offset = atomicAdd(item_counts_per_variant[variant_index].x, 1u);
-            tile_raster_work[work_offset + uint(TILE_INSTANCE_STRIDE) * variant_index] =
-                u16vec4(uvec4(tile.x, tile.y, instance_offset, primitive_index));
-            instance_offset++;
-        }
+    uvec4 ballot_result = subgroupBallot(group_bin_to_tile);
+#if !UBERSHADER
+    uint bit_count = uint(bitCount(binned));
+    uint total_bit_count = subgroupAdd(bit_count);
+    uint instance_offset = 0u;
 #endif
-
+    if (subgroupElect())
+    {
+#if !UBERSHADER
+        if (total_bit_count != 0u)
+            instance_offset = atomicAdd(item_counts_per_variant[0].w, total_bit_count);
 #endif
-
-        mask_index++;
+        uint binned_bitmask_offset = uint(TILE_BINNING_STRIDE_COARSE * linear_tile);
+        if (gl_SubgroupSize == 64u)
+        {
+            binned_bitmask_coarse[binned_bitmask_offset + 2u * gl_WorkGroupID.x] = ballot_result.x;
+            binned_bitmask_coarse[binned_bitmask_offset + 2u * gl_WorkGroupID.x + 1u] = ballot_result.y;
+        }
+        else if (gl_SubgroupSize == 32u)
+        {
+            binned_bitmask_coarse[binned_bitmask_offset + gl_SubgroupID + (gl_WorkGroupSize.x / 32u) * gl_WorkGroupID.x] = ballot_result.x;
+        }
     }
 
-    // Need to merge group mask here across the 16 slices, each slice worked on 2 bits.
-    shared_group_binning[local_index_y][local_tile_y][local_tile_x] = group_binned;
+#if !UBERSHADER
+    instance_offset = subgroupBroadcastFirst(instance_offset);
+    instance_offset += subgroupInclusiveAdd(bit_count) - bit_count;
+#endif
+#else
+    if (local_index == 0u)
+        merged_mask = 0u;
     barrier();
 
-    uint step = NUM_SLICES >> 1u;
-    for (uint step = NUM_SLICES >> 1u; step >= 2u; step >>= 1u)
-    {
-        if (local_index_y < step)
-            shared_group_binning[local_index_y][local_tile_y][local_tile_x] |= shared_group_binning[local_index_y + step][local_tile_y][local_tile_x];
-        barrier();
-    }
+    if (group_bin_to_tile)
+        atomicOr(merged_mask, 1u << local_index);
 
-    if (local_index_y == 0u)
+    barrier();
+
+    if (local_index == 0u)
     {
         uint binned_bitmask_offset = uint(TILE_BINNING_STRIDE_COARSE * linear_tile);
-        uint group_binned = shared_group_binning[0][local_tile_y][local_tile_x] | shared_group_binning[1][local_tile_y][local_tile_x];
-        binned_bitmask_coarse[binned_bitmask_offset + gl_WorkGroupID.x] = group_binned;
+        binned_bitmask_coarse[binned_bitmask_offset + gl_WorkGroupID.x] = merged_mask;
     }
+
+#if !UBERSHADER
+    uint bit_count = uint(bitCount(binned));
+    uint instance_offset = 0u;
+    if (bit_count != 0u)
+        instance_offset = atomicAdd(item_counts_per_variant[0].w, bit_count);
+#endif
+#endif
+
+#if !UBERSHADER
+    if (bit_count != 0u)
+        tile_instance_offset[linear_tile * TILE_BINNING_STRIDE + mask_index] = uint16_t(instance_offset);
+
+    while (binned != 0u)
+    {
+        int i = findLSB(binned);
+        binned &= ~uint(1 << i);
+        int primitive_index = i + mask_index * 32;
+        uint variant_index = uint(state_indices[primitive_index]);
+
+        uint work_offset = allocate_work_offset(variant_index);
+        tile_raster_work[work_offset + uint(TILE_INSTANCE_STRIDE) * variant_index] =
+            u16vec4(uvec4(tile.x, tile.y, instance_offset, primitive_index));
+        instance_offset++;
+    }
+#endif
 }

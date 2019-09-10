@@ -455,29 +455,21 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd, bool ubershader)
 
 	if (subgroup && (features.subgroup_properties.supportedOperations & required) == required &&
 	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
-	    can_support_minimum_subgroup_size(TILE_DOWNSAMPLE))
+	    can_support_minimum_subgroup_size(32))
 	{
 		cmd.set_program("assets://shaders/binning.comp", {{ "SUBGROUP", 1 }, { "UBERSHADER", ubershader ? 1 : 0 }});
-		cmd.set_specialization_constant_mask(0xf);
-
-		uint32_t num_slices = 256 / subgroup_size;
-		cmd.set_specialization_constant(0, 256);
-
-		uint32_t subgroup_tiles_x = TILE_DOWNSAMPLE;
-		uint32_t subgroup_tiles_y = subgroup_size / TILE_DOWNSAMPLE;
-		cmd.set_specialization_constant(1, subgroup_tiles_x);
-		cmd.set_specialization_constant(2, subgroup_tiles_y);
-		cmd.set_specialization_constant(3, num_slices);
+		cmd.set_specialization_constant_mask(1);
+		cmd.set_specialization_constant(0, subgroup_size);
 
 		if (supports_subgroup_size_control())
 		{
 			cmd.enable_subgroup_size_control(true);
-			cmd.set_subgroup_size_log2(true, trailing_zeroes(TILE_DOWNSAMPLE), 7);
+			cmd.set_subgroup_size_log2(true, 5, trailing_zeroes(subgroup_size));
 		}
 
-		cmd.dispatch((num_masks + 31) / 32,
-		             (width + subgroup_tiles_x * TILE_WIDTH - 1) / (subgroup_tiles_x * TILE_WIDTH),
-		             (height + subgroup_tiles_y * TILE_HEIGHT - 1) / (subgroup_tiles_y * TILE_HEIGHT));
+		cmd.dispatch((num_masks + subgroup_size - 1) / subgroup_size,
+		             (width + TILE_WIDTH - 1) / TILE_WIDTH,
+		             (height + TILE_HEIGHT - 1) / TILE_HEIGHT);
 
 		cmd.enable_subgroup_size_control(false);
 	}
@@ -486,8 +478,8 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd, bool ubershader)
 		// Fallback with shared memory.
 		cmd.set_program("assets://shaders/binning.comp", {{ "SUBGROUP", 0 }, { "UBERSHADER", ubershader ? 1 : 0 }});
 		cmd.dispatch((num_masks + 31) / 32,
-		             (width + 8 * TILE_WIDTH - 1) / (8 * TILE_WIDTH),
-		             (height + 4 * TILE_HEIGHT - 1) / (4 * TILE_HEIGHT));
+		             (width + TILE_WIDTH - 1) / TILE_WIDTH,
+		             (height + TILE_HEIGHT - 1) / TILE_HEIGHT);
 	}
 
 	cmd.end_region();
