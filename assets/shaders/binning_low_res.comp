@@ -36,7 +36,7 @@ void main()
     int primitive_index = int(gl_GlobalInvocationID.x);
 
 #if SUBGROUP
-    uint local_index = gl_SubgroupInvocationID;
+    uint local_index = gl_SubgroupInvocationID + gl_SubgroupID * gl_SubgroupSize;
 #else
     uint local_index = gl_LocalInvocationIndex;
 #endif
@@ -58,7 +58,7 @@ void main()
         }
         else if (gl_SubgroupSize == 32u)
         {
-            binned_bitmask[binned_bitmask_offset + gl_WorkGroupID.x] = ballot_result.x;
+            binned_bitmask[binned_bitmask_offset + gl_SubgroupID + (gl_WorkGroupSize.x / 32u) * gl_WorkGroupID.x] = ballot_result.x;
         }
     }
 #else
@@ -68,7 +68,7 @@ void main()
     barrier();
 
     if (bin_to_tile)
-    atomicOr(merged_mask, 1u << local_index);
+        atomicOr(merged_mask, 1u << local_index);
 
     barrier();
 

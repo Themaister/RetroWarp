@@ -397,7 +397,7 @@ void RasterizerGPU::Impl::binning_low_res_prepass(CommandBuffer &cmd)
 	const VkSubgroupFeatureFlags required = VK_SUBGROUP_FEATURE_BALLOT_BIT | VK_SUBGROUP_FEATURE_BASIC_BIT;
 	if (subgroup && (features.subgroup_properties.supportedOperations & required) == required &&
 	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
-	    can_support_minimum_subgroup_size(subgroup_size) && subgroup_size <= 64)
+	    can_support_minimum_subgroup_size(32) && subgroup_size <= 64)
 	{
 		cmd.set_program("assets://shaders/binning_low_res.comp", {{ "SUBGROUP", 1 }});
 		cmd.set_specialization_constant_mask(1);
@@ -406,7 +406,7 @@ void RasterizerGPU::Impl::binning_low_res_prepass(CommandBuffer &cmd)
 		if (supports_subgroup_size_control())
 		{
 			cmd.enable_subgroup_size_control(true);
-			cmd.set_subgroup_size_log2(true, trailing_zeroes(subgroup_size), trailing_zeroes(subgroup_size));
+			cmd.set_subgroup_size_log2(true, 5, trailing_zeroes(subgroup_size));
 		}
 		cmd.dispatch((staging.count + subgroup_size - 1) / subgroup_size,
 		             (width + TILE_DOWNSAMPLE * TILE_WIDTH - 1) / (TILE_DOWNSAMPLE * TILE_WIDTH),
@@ -459,13 +459,15 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd, bool ubershader)
 	{
 		cmd.set_program("assets://shaders/binning.comp", {{ "SUBGROUP", 1 }, { "UBERSHADER", ubershader ? 1 : 0 }});
 		cmd.set_specialization_constant_mask(0xf);
-		cmd.set_specialization_constant(0, subgroup_size * 16);
+
+		uint32_t num_slices = 256 / subgroup_size;
+		cmd.set_specialization_constant(0, 256);
 
 		uint32_t subgroup_tiles_x = TILE_DOWNSAMPLE;
 		uint32_t subgroup_tiles_y = subgroup_size / TILE_DOWNSAMPLE;
 		cmd.set_specialization_constant(1, subgroup_tiles_x);
 		cmd.set_specialization_constant(2, subgroup_tiles_y);
-		cmd.set_specialization_constant(3, 16);
+		cmd.set_specialization_constant(3, num_slices);
 
 		if (supports_subgroup_size_control())
 		{
