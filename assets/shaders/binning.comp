@@ -87,7 +87,11 @@ void main()
     ivec2 end_coord = min(base_coord + ivec2(TILE_WIDTH, TILE_HEIGHT), ivec2(fb_info.resolution));
 
     int local_index_y = int(local_index / (PER_WAVE_TILES_X * PER_WAVE_TILES_Y));
+#if SUBGROUP
+    int mask_index = subgroupBroadcastFirst(32 * int(gl_WorkGroupID.x) + int(BITS_PER_SLICE) * local_index_y);
+#else
     int mask_index = 32 * int(gl_WorkGroupID.x) + int(BITS_PER_SLICE) * local_index_y;
+#endif
 
     uint group_binned = 0u;
     int mask_end = min(mask_index + int(BITS_PER_SLICE), fb_info.primitive_count_32);

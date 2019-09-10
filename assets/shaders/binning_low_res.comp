@@ -33,13 +33,13 @@ void main()
     ivec2 base_coord = tile * (ivec2(TILE_WIDTH, TILE_HEIGHT) * TILE_DOWNSAMPLE);
     ivec2 end_coord = min(base_coord + ivec2(TILE_WIDTH, TILE_HEIGHT) * TILE_DOWNSAMPLE, ivec2(fb_info.resolution));
 
-    int primitive_index = int(gl_GlobalInvocationID.x);
-
 #if SUBGROUP
     uint local_index = gl_SubgroupInvocationID + gl_SubgroupID * gl_SubgroupSize;
 #else
     uint local_index = gl_LocalInvocationIndex;
 #endif
+
+    int primitive_index = int(gl_WorkGroupID.x * gl_WorkGroupSize.x + local_index);
 
     bool bin_to_tile = false;
     if (primitive_index < fb_info.primitive_count)
