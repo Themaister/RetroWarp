@@ -33,7 +33,7 @@ public:
 	bool parse_resolution(uint32_t &width, uint32_t &height);
 	bool parse_num_textures(uint32_t &count);
 
-	enum Op { TEX, PRIM };
+	enum Op { TEX, PRIM, AlphaThreshold, BlendState, CombinerMode, ConstantColor, DepthTest, DepthWrite };
 	bool parse_op(Op &op);
 	bool parse_uint(uint32_t &value);
 	bool parse_primitive(PrimitiveSetup &setup);
@@ -96,6 +96,42 @@ bool StreamReader::parse_op(Op &op)
 	else if (memcmp(blob + offset, "PRIM", 4) == 0)
 	{
 		op = Op::PRIM;
+		offset += 4;
+		return true;
+	}
+	else if (memcmp(blob + offset, "ATRS", 4) == 0)
+	{
+		op = Op::AlphaThreshold;
+		offset += 4;
+		return true;
+	}
+	else if (memcmp(blob + offset, "BSTA", 4) == 0)
+	{
+		op = Op::BlendState;
+		offset += 4;
+		return true;
+	}
+	else if (memcmp(blob + offset, "CMOD", 4) == 0)
+	{
+		op = Op::CombinerMode;
+		offset += 4;
+		return true;
+	}
+	else if (memcmp(blob + offset, "CCOL", 4) == 0)
+	{
+		op = Op::ConstantColor;
+		offset += 4;
+		return true;
+	}
+	else if (memcmp(blob + offset, "DTST", 4) == 0)
+	{
+		op = Op::DepthTest;
+		offset += 4;
+		return true;
+	}
+	else if (memcmp(blob + offset, "DWRT", 4) == 0)
+	{
+		op = Op::DepthWrite;
 		offset += 4;
 		return true;
 	}
@@ -215,8 +251,26 @@ int main(int argc, char **argv)
 		textures[i] = device.create_image_from_staging_buffer(info, &staging);
 	}
 
-	std::vector<std::pair<unsigned, PrimitiveSetup>> commands;
-	uint32_t current_state_index = 0;
+	struct Cache
+	{
+		unsigned state_index;
+		uint8_t alpha_threshold;
+		BlendState blend_state;
+		PrimitiveSetup setup;
+		CombinerFlags combiner_state;
+		DepthTest depth_test;
+		DepthWrite depth_write;
+		uint8_t constant_color[4];
+	};
+
+	std::vector<Cache> commands;
+
+	Cache current = {};
+	current.blend_state = BlendState::Replace;
+	current.combiner_state = COMBINER_MODE_TEX_MOD_COLOR | COMBINER_SAMPLE_BIT;
+	current.depth_test = DepthTest::LE;
+	current.depth_write = DepthWrite::On;
+
 	while (!reader.eof())
 	{
 		StreamReader::Op op;
@@ -228,7 +282,7 @@ int main(int argc, char **argv)
 
 		if (op == StreamReader::Op::TEX)
 		{
-			if (!reader.parse_uint(current_state_index))
+			if (!reader.parse_uint(current.state_index))
 			{
 				LOGE("Failed to parse uint.\n");
 				return EXIT_FAILURE;
@@ -236,20 +290,81 @@ int main(int argc, char **argv)
 		}
 		else if (op == StreamReader::Op::PRIM)
 		{
-			PrimitiveSetup setup;
-			if (!reader.parse_primitive(setup))
+			if (!reader.parse_primitive(current.setup))
 			{
 				LOGE("Failed to parse primitive.\n");
 				return EXIT_FAILURE;
 			}
-			commands.push_back({ current_state_index, setup });
+			commands.push_back(current);
+		}
+		else if (op == StreamReader::Op::AlphaThreshold)
+		{
+			uint32_t word;
+			if (!reader.parse_uint(word))
+			{
+				LOGE("Failed to parse alpha threshold.\n");
+				return EXIT_FAILURE;
+			}
+			current.alpha_threshold = word;
+		}
+		else if (op == StreamReader::Op::BlendState)
+		{
+			uint32_t word;
+			if (!reader.parse_uint(word))
+			{
+				LOGE("Failed to parse blend state.\n");
+				return EXIT_FAILURE;
+			}
+			current.blend_state = BlendState(word);
+		}
+		else if (op == StreamReader::Op::CombinerMode)
+		{
+			uint32_t word;
+			if (!reader.parse_uint(word))
+			{
+				LOGE("Failed to parse blend state.\n");
+				return EXIT_FAILURE;
+			}
+			current.combiner_state = word;
+		}
+		else if (op == StreamReader::Op::ConstantColor)
+		{
+			uint32_t word;
+			if (!reader.parse_uint(word))
+			{
+				LOGE("Failed to parse constant color.\n");
+				return EXIT_FAILURE;
+			}
+			current.constant_color[0] = (word >> 0) & 0xff;
+			current.constant_color[1] = (word >> 8) & 0xff;
+			current.constant_color[2] = (word >> 16) & 0xff;
+			current.constant_color[3] = (word >> 24) & 0xff;
+		}
+		else if (op == StreamReader::Op::DepthTest)
+		{
+			uint32_t word;
+			if (!reader.parse_uint(word))
+			{
+				LOGE("Failed to parse depth test.\n");
+				return EXIT_FAILURE;
+			}
+			current.depth_test = DepthTest(word);
+		}
+		else if (op == StreamReader::Op::DepthWrite)
+		{
+			uint32_t word;
+			if (!reader.parse_uint(word))
+			{
+				LOGE("Failed to parse depth write.\n");
+				return EXIT_FAILURE;
+			}
+			current.depth_write = DepthWrite(word);
 		}
 	}
 
 	RasterizerGPU rasterizer;
 	rasterizer.init(device, subgroup, ubershader, async_compute);
 	rasterizer.resize(width, height);
-	rasterizer.set_depth_state(DepthTest::LE, DepthWrite::On);
 
 	auto start_run = Util::get_current_time_nsecs();
 	for (unsigned i = 0; i < 1000; i++)
@@ -259,8 +374,14 @@ int main(int argc, char **argv)
 		rasterizer.clear_color();
 		for (auto &command : commands)
 		{
-			rasterizer.set_texture(textures[command.first]->get_view());
-			rasterizer.rasterize_primitives(&command.second, 1);
+			rasterizer.set_texture(textures[command.state_index]->get_view());
+			rasterizer.set_combiner_mode(command.combiner_state);
+			rasterizer.set_constant_color(command.constant_color[0], command.constant_color[1], command.constant_color[2], command.constant_color[3]);
+			rasterizer.set_depth_state(command.depth_test, command.depth_write);
+			rasterizer.set_alpha_threshold(command.alpha_threshold);
+			rasterizer.set_rop_state(command.blend_state);
+			rasterizer.set_depth_state(command.depth_test, command.depth_write);
+			rasterizer.rasterize_primitives(&command.setup, 1);
 		}
 		rasterizer.flush();
 	}

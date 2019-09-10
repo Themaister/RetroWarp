@@ -243,6 +243,8 @@ struct SWRenderApplication : Application, EventHandler
 	void dump_textures(const std::vector<SceneFormats::MemoryMappedTexture *> &textures);
 	void dump_set_texture(unsigned index);
 	void dump_primitives(const PrimitiveSetup *setup, unsigned count);
+	void dump_alpha_threshold(uint8_t threshold);
+	void dump_rop_state(BlendState blend_state);
 
 	struct Cached
 	{
@@ -306,6 +308,20 @@ void SWRenderApplication::dump_set_texture(unsigned index)
 		return;
 	uint32_t word = index;
 	fwrite("TEX ", 1, 4, dump_file);
+	fwrite(&word, 1, sizeof(word), dump_file);
+}
+
+void SWRenderApplication::dump_alpha_threshold(uint8_t threshold)
+{
+	fwrite("ATRS", 1, 4, dump_file);
+	uint32_t word = threshold;
+	fwrite(&word, 1, sizeof(word), dump_file);
+}
+
+void SWRenderApplication::dump_rop_state(BlendState blend_state)
+{
+	fwrite("BSTA", 1, 4, dump_file);
+	uint32_t word = uint32_t(blend_state);
 	fwrite(&word, 1, sizeof(word), dump_file);
 }
 
@@ -482,16 +498,31 @@ void SWRenderApplication::render_frame(double frame_time, double)
 		case DrawPipeline::Opaque:
 			rasterizer_gpu.set_alpha_threshold(0);
 			rasterizer_gpu.set_rop_state(BlendState::Replace);
+			if (queue_dump_frame)
+			{
+				dump_alpha_threshold(0);
+				dump_rop_state(BlendState::Replace);
+			}
 			break;
 
 		case DrawPipeline::AlphaTest:
 			rasterizer_gpu.set_alpha_threshold(128);
 			rasterizer_gpu.set_rop_state(BlendState::Replace);
+			if (queue_dump_frame)
+			{
+				dump_alpha_threshold(128);
+				dump_rop_state(BlendState::Replace);
+			}
 			break;
 
 		case DrawPipeline::AlphaBlend:
 			rasterizer_gpu.set_alpha_threshold(0);
 			rasterizer_gpu.set_rop_state(BlendState::Alpha);
+			if (queue_dump_frame)
+			{
+				dump_alpha_threshold(0);
+				dump_rop_state(BlendState::Alpha);
+			}
 			break;
 		}
 
