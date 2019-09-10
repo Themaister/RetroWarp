@@ -52,7 +52,7 @@ public:
 	RasterizerGPU();
 	~RasterizerGPU();
 
-	void init(Vulkan::Device &device, bool subgroup, bool ubershader, bool async_compute);
+	void init(Vulkan::Device &device, bool subgroup, bool ubershader, bool async_compute, unsigned tile_size);
 
 	void set_depth_state(DepthTest mode, DepthWrite write);
 	void set_rop_state(BlendState state);

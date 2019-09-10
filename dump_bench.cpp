@@ -163,17 +163,25 @@ int main(int argc, char **argv)
 	bool subgroup = true;
 	bool async_compute = false;
 	std::string path;
+	unsigned tile_size = 16;
 
 	Util::CLICallbacks cbs;
 	cbs.add("--ubershader", [&](Util::CLIParser &) { ubershader = true; });
 	cbs.add("--nosubgroup", [&](Util::CLIParser &) { subgroup = false; });
 	cbs.add("--async-compute", [&](Util::CLIParser &) { async_compute = true; });
+	cbs.add("--tile-size", [&](Util::CLIParser &parser) { tile_size = parser.next_uint(); });
 	cbs.default_handler = [&](const char *arg) { path = arg; };
 	Util::CLIParser parser(std::move(cbs), argc - 1, argv + 1);
 
 	if (!parser.parse() || path.empty())
 	{
 		LOGE("Failed to parse.\n");
+		return EXIT_FAILURE;
+	}
+
+	if (tile_size & (tile_size - 1))
+	{
+		LOGE("Tile size must be POT.\n");
 		return EXIT_FAILURE;
 	}
 
@@ -363,7 +371,7 @@ int main(int argc, char **argv)
 	}
 
 	RasterizerGPU rasterizer;
-	rasterizer.init(device, subgroup, ubershader, async_compute);
+	rasterizer.init(device, subgroup, ubershader, async_compute, tile_size);
 	rasterizer.resize(width, height);
 
 	auto start_run = Util::get_current_time_nsecs();

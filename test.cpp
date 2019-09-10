@@ -223,7 +223,7 @@ static void create_software_renderable(Entity *entity, RenderableComponent *rend
 struct SWRenderApplication : Application, EventHandler
 {
 	explicit SWRenderApplication(const std::string &path, bool subgroup, bool ubershader, bool async_compute,
-	                             unsigned width, unsigned height);
+	                             unsigned width, unsigned height, unsigned tile_size);
 	void render_frame(double, double) override;
 
 	SceneLoader loader;
@@ -260,11 +260,12 @@ struct SWRenderApplication : Application, EventHandler
 	bool async_compute;
 	unsigned width;
 	unsigned height;
+	unsigned tile_size;
 };
 
 void SWRenderApplication::on_device_created(const Vulkan::DeviceCreatedEvent& e)
 {
-	rasterizer_gpu.init(e.get_device(), subgroup, ubershader, async_compute);
+	rasterizer_gpu.init(e.get_device(), subgroup, ubershader, async_compute, tile_size);
 	rasterizer_gpu.resize(width, height);
 	rasterizer_gpu.set_rop_state(BlendState::Replace);
 	rasterizer_gpu.set_depth_state(DepthTest::LE, DepthWrite::On);
@@ -344,9 +345,9 @@ void SWRenderApplication::end_dump_frame()
 }
 
 SWRenderApplication::SWRenderApplication(const std::string &path, bool subgroup_, bool ubershader_, bool async_compute_,
-                                         unsigned width_, unsigned height_)
+                                         unsigned width_, unsigned height_, unsigned tile_size_)
 		: subgroup(subgroup_), ubershader(ubershader_), async_compute(async_compute_),
-		  width(width_), height(height_)
+		  width(width_), height(height_), tile_size(tile_size_)
 {
 	loader.load_scene(path);
 
@@ -592,6 +593,7 @@ Application *application_create(int argc, char **argv)
 	std::string path;
 	unsigned width = 1280;
 	unsigned height = 720;
+	unsigned tile_size = 16;
 
 	Util::CLICallbacks cbs;
 	cbs.add("--ubershader", [&](Util::CLIParser &) { ubershader = true; });
@@ -599,6 +601,7 @@ Application *application_create(int argc, char **argv)
 	cbs.add("--async-compute", [&](Util::CLIParser &) { async_compute = true; });
 	cbs.add("--width", [&](Util::CLIParser &parser) { width = parser.next_uint(); });
 	cbs.add("--height", [&](Util::CLIParser &parser) { height = parser.next_uint(); });
+	cbs.add("--tile-size", [&](Util::CLIParser &parser) { tile_size = parser.next_uint(); });
 	cbs.default_handler = [&](const char *arg) { path = arg; };
 	Util::CLIParser parser(std::move(cbs), argc - 1, argv + 1);
 
@@ -608,7 +611,13 @@ Application *application_create(int argc, char **argv)
 		return nullptr;
 	}
 
+	if (tile_size & (tile_size - 1))
+	{
+		LOGE("Tile size must be POT.\n");
+		return nullptr;
+	}
+
 	Global::filesystem()->register_protocol("assets", std::make_unique<OSFilesystem>(ASSET_DIRECTORY));
-	return new SWRenderApplication(path, subgroup, ubershader, async_compute, width, height);
+	return new SWRenderApplication(path, subgroup, ubershader, async_compute, width, height, tile_size);
 }
 }
