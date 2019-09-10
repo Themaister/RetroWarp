@@ -5,17 +5,17 @@
 
 #if defined(DERIVATIVE_GROUP_QUAD)
 #extension GL_NV_compute_shader_derivatives : require
-layout(derivative_group_quadsNV, local_size_x = 8, local_size_y = 8) in;
+layout(derivative_group_quadsNV, local_size_x = TILE_SIZE, local_size_y = TILE_SIZE) in;
 #elif defined(DERIVATIVE_GROUP_LINEAR)
 #extension GL_NV_compute_shader_derivatives : require
-layout(derivative_group_linearNV, local_size_x = 64) in;
+layout(derivative_group_linearNV, local_size_x = TILE_SIZE_SQUARE) in;
 #elif SUBGROUP
 #extension GL_KHR_shader_subgroup_shuffle : require
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_ballot : require
-layout(local_size_x = 64) in;
+layout(local_size_x = TILE_SIZE_SQUARE) in;
 #else
-layout(local_size_x = 64) in;
+layout(local_size_x = TILE_SIZE_SQUARE) in;
 #endif
 
 #include "combiner.h"
@@ -86,8 +86,8 @@ void main()
     int y = int(gl_WorkGroupID.y * uint(TILE_HEIGHT) + gl_LocalInvocationID.y);
 #else
     uint quad_index = local_index >> 2u;
-    uint quad_x = quad_index & 3u;
-    uint quad_y = (quad_index >> 2u) & 3u;
+    uint quad_x = quad_index % (TILE_SIZE >> 1u);
+    uint quad_y = quad_index / (TILE_SIZE >> 1u);
 
     uint local_x = quad_x * 2u + (local_index & 1u);
     uint local_y = quad_y * 2u + ((local_index >> 1u) & 1u);

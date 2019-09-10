@@ -159,16 +159,14 @@ constexpr int TILE_BINNING_STRIDE = MAX_PRIMITIVES / 32;
 constexpr int TILE_BINNING_STRIDE_COARSE = TILE_BINNING_STRIDE / 32;
 constexpr int MAX_WIDTH = 2048;
 constexpr int MAX_HEIGHT = 2048;
-constexpr int TILE_WIDTH = 8;
-constexpr int TILE_HEIGHT = 8;
-constexpr int TILE_WIDTH_LOG2 = 3;
-constexpr int TILE_HEIGHT_LOG2 = 3;
-constexpr int MAX_TILES_X = MAX_WIDTH / TILE_WIDTH;
-constexpr int MAX_TILES_Y = MAX_HEIGHT / TILE_HEIGHT;
+constexpr int TILE_SIZE = 16;
+constexpr int TILE_SIZE_LOG2 = 4;
+constexpr int MAX_TILES_X = MAX_WIDTH / TILE_SIZE;
+constexpr int MAX_TILES_Y = MAX_HEIGHT / TILE_SIZE;
 constexpr int TILE_DOWNSAMPLE = 8;
 constexpr int TILE_DOWNSAMPLE_LOG2 = 3;
-constexpr int MAX_TILES_X_LOW_RES = MAX_WIDTH / (TILE_DOWNSAMPLE * TILE_WIDTH);
-constexpr int MAX_TILES_Y_LOW_RES = MAX_HEIGHT / (TILE_DOWNSAMPLE * TILE_HEIGHT);
+constexpr int MAX_TILES_X_LOW_RES = MAX_WIDTH / (TILE_DOWNSAMPLE * TILE_SIZE);
+constexpr int MAX_TILES_Y_LOW_RES = MAX_HEIGHT / (TILE_DOWNSAMPLE * TILE_SIZE);
 constexpr int MAX_NUM_TILE_INSTANCES = 0xffff;
 const int RASTER_ROUNDING = (1 << (SUBPIXELS_LOG2 + 16)) - 1;
 
@@ -241,10 +239,10 @@ unsigned RasterizerGPU::Impl::compute_num_conservative_tiles(const PrimitiveSetu
 	if (!clip_bbox_scissor(clipped_bbox, bbox))
 		return 0;
 
-	int start_tile_x = clipped_bbox.min_x >> TILE_WIDTH_LOG2;
-	int end_tile_x = clipped_bbox.max_x >> TILE_WIDTH_LOG2;
-	int start_tile_y = clipped_bbox.min_y >> TILE_HEIGHT_LOG2;
-	int end_tile_y = clipped_bbox.max_y >> TILE_HEIGHT_LOG2;
+	int start_tile_x = clipped_bbox.min_x >> TILE_SIZE_LOG2;
+	int end_tile_x = clipped_bbox.max_x >> TILE_SIZE_LOG2;
+	int start_tile_y = clipped_bbox.min_y >> TILE_SIZE_LOG2;
+	int end_tile_y = clipped_bbox.max_y >> TILE_SIZE_LOG2;
 	return (end_tile_x - start_tile_x + 1) * (end_tile_y - start_tile_y + 1);
 }
 
@@ -399,7 +397,7 @@ void RasterizerGPU::Impl::binning_low_res_prepass(CommandBuffer &cmd)
 	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
 	    can_support_minimum_subgroup_size(32) && subgroup_size <= 64)
 	{
-		cmd.set_program("assets://shaders/binning_low_res.comp", {{ "SUBGROUP", 1 }});
+		cmd.set_program("assets://shaders/binning_low_res.comp", {{ "SUBGROUP", 1 }, { "TILE_SIZE", int(TILE_SIZE) }});
 		cmd.set_specialization_constant_mask(1);
 		cmd.set_specialization_constant(0, subgroup_size);
 
@@ -409,17 +407,17 @@ void RasterizerGPU::Impl::binning_low_res_prepass(CommandBuffer &cmd)
 			cmd.set_subgroup_size_log2(true, 5, trailing_zeroes(subgroup_size));
 		}
 		cmd.dispatch((staging.count + subgroup_size - 1) / subgroup_size,
-		             (width + TILE_DOWNSAMPLE * TILE_WIDTH - 1) / (TILE_DOWNSAMPLE * TILE_WIDTH),
-		             (height + TILE_DOWNSAMPLE * TILE_HEIGHT - 1) / (TILE_DOWNSAMPLE * TILE_HEIGHT));
+		             (width + TILE_DOWNSAMPLE * TILE_SIZE - 1) / (TILE_DOWNSAMPLE * TILE_SIZE),
+		             (height + TILE_DOWNSAMPLE * TILE_SIZE - 1) / (TILE_DOWNSAMPLE * TILE_SIZE));
 		cmd.enable_subgroup_size_control(false);
 	}
 	else
 	{
 		// Fallback with shared memory.
-		cmd.set_program("assets://shaders/binning_low_res.comp", {{ "SUBGROUP", 0 }});
+		cmd.set_program("assets://shaders/binning_low_res.comp", {{ "SUBGROUP", 0 }, { "TILE_SIZE", int(TILE_SIZE) }});
 		cmd.dispatch((staging.count + 31) / 32,
-		             (width + TILE_DOWNSAMPLE * TILE_WIDTH - 1) / (TILE_DOWNSAMPLE * TILE_WIDTH),
-		             (height + TILE_DOWNSAMPLE * TILE_HEIGHT - 1) / (TILE_DOWNSAMPLE * TILE_HEIGHT));
+		             (width + TILE_DOWNSAMPLE * TILE_SIZE - 1) / (TILE_DOWNSAMPLE * TILE_SIZE),
+		             (height + TILE_DOWNSAMPLE * TILE_SIZE - 1) / (TILE_DOWNSAMPLE * TILE_SIZE));
 	}
 	cmd.end_region();
 	cmd.set_specialization_constant_mask(0);
@@ -457,7 +455,7 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd, bool ubershader)
 	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
 	    can_support_minimum_subgroup_size(32))
 	{
-		cmd.set_program("assets://shaders/binning.comp", {{ "SUBGROUP", 1 }, { "UBERSHADER", ubershader ? 1 : 0 }});
+		cmd.set_program("assets://shaders/binning.comp", {{ "SUBGROUP", 1 }, { "UBERSHADER", ubershader ? 1 : 0 }, { "TILE_SIZE", int(TILE_SIZE) }});
 		cmd.set_specialization_constant_mask(1);
 		cmd.set_specialization_constant(0, subgroup_size);
 
@@ -468,18 +466,18 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd, bool ubershader)
 		}
 
 		cmd.dispatch((num_masks + subgroup_size - 1) / subgroup_size,
-		             (width + TILE_WIDTH - 1) / TILE_WIDTH,
-		             (height + TILE_HEIGHT - 1) / TILE_HEIGHT);
+		             (width + TILE_SIZE - 1) / TILE_SIZE,
+		             (height + TILE_SIZE - 1) / TILE_SIZE);
 
 		cmd.enable_subgroup_size_control(false);
 	}
 	else
 	{
 		// Fallback with shared memory.
-		cmd.set_program("assets://shaders/binning.comp", {{ "SUBGROUP", 0 }, { "UBERSHADER", ubershader ? 1 : 0 }});
+		cmd.set_program("assets://shaders/binning.comp", {{ "SUBGROUP", 0 }, { "UBERSHADER", ubershader ? 1 : 0 }, { "TILE_SIZE", int(TILE_SIZE) }});
 		cmd.dispatch((num_masks + 31) / 32,
-		             (width + TILE_WIDTH - 1) / TILE_WIDTH,
-		             (height + TILE_HEIGHT - 1) / TILE_HEIGHT);
+		             (width + TILE_SIZE - 1) / TILE_SIZE,
+		             (height + TILE_SIZE - 1) / TILE_SIZE);
 	}
 
 	cmd.end_region();
@@ -534,26 +532,45 @@ void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 
 	if (features.compute_shader_derivative_features.computeDerivativeGroupQuads)
 	{
-		cmd.set_program("assets://shaders/combiner.comp", { {"DERIVATIVE_GROUP_QUAD", 1}, {"SUBGROUP", 0} });
+		cmd.set_program("assets://shaders/combiner.comp", {
+			{"DERIVATIVE_GROUP_QUAD", 1},
+			{"SUBGROUP", 0},
+			{"TILE_SIZE", int(TILE_SIZE)},
+			{"TILE_SIZE_SQUARE", int(TILE_SIZE * TILE_SIZE)},
+		});
 	}
 	else if (features.compute_shader_derivative_features.computeDerivativeGroupLinear)
 	{
-		cmd.set_program("assets://shaders/combiner.comp", { {"DERIVATIVE_GROUP_LINEAR", 1}, {"SUBGROUP", 0} });
+		cmd.set_program("assets://shaders/combiner.comp", {
+				{"DERIVATIVE_GROUP_LINEAR", 1},
+				{"SUBGROUP", 0},
+				{"TILE_SIZE", int(TILE_SIZE)},
+				{"TILE_SIZE_SQUARE", int(TILE_SIZE * TILE_SIZE)},
+		});
 	}
 	else if (subgroup && (features.subgroup_properties.supportedOperations & required) == required &&
 	         (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
 	         can_support_minimum_subgroup_size(4))
 	{
-		cmd.set_program("assets://shaders/combiner.comp", { {"SUBGROUP", 1} });
-		if (supports_subgroup_size_control(4, 128))
+		cmd.set_program("assets://shaders/combiner.comp", {
+				{"SUBGROUP", 1},
+				{"TILE_SIZE", int(TILE_SIZE)},
+				{"TILE_SIZE_SQUARE", int(TILE_SIZE * TILE_SIZE)},
+		});
+
+		if (supports_subgroup_size_control(4, 64))
 		{
-			cmd.set_subgroup_size_log2(true, 2, 7);
+			cmd.set_subgroup_size_log2(true, 2, 6);
 			cmd.enable_subgroup_size_control(true);
 		}
 	}
 	else
 	{
-		cmd.set_program("assets://shaders/combiner.comp", { {"SUBGROUP", 0} });
+		cmd.set_program("assets://shaders/combiner.comp", {
+				{"SUBGROUP", 0},
+				{"TILE_SIZE", int(TILE_SIZE)},
+				{"TILE_SIZE_SQUARE", int(TILE_SIZE * TILE_SIZE)},
+		});
 	}
 
 	for (unsigned variant = 0; variant < state.state_count; variant++)
@@ -574,8 +591,8 @@ void RasterizerGPU::Impl::set_fb_info(CommandBuffer &cmd)
 	auto *fb_info = cmd.allocate_typed_constant_data<FBInfo>(2, 0, 1);
 	fb_info->resolution.x = width;
 	fb_info->resolution.y = height;
-	fb_info->resolution_tiles.x = (width + TILE_WIDTH - 1) / TILE_WIDTH;
-	fb_info->resolution_tiles.y = (height + TILE_HEIGHT - 1) / TILE_HEIGHT;
+	fb_info->resolution_tiles.x = (width + TILE_SIZE - 1) / TILE_SIZE;
+	fb_info->resolution_tiles.y = (height + TILE_SIZE - 1) / TILE_SIZE;
 	fb_info->fb_stride = width;
 	fb_info->primitive_count = staging.count;
 	uint32_t num_masks = (staging.count + 31) / 32;
@@ -586,7 +603,6 @@ void RasterizerGPU::Impl::set_fb_info(CommandBuffer &cmd)
 void RasterizerGPU::Impl::run_rop_ubershader(CommandBuffer &cmd)
 {
 	cmd.begin_region("run-rop");
-	cmd.set_program("assets://shaders/rop_ubershader.comp");
 	cmd.set_storage_buffer(0, 0, *color_buffer);
 	cmd.set_storage_buffer(0, 1, *depth_buffer);
 	cmd.set_storage_buffer(0, 2, *binning.mask_buffer[tile_instance_data.index]);
@@ -610,17 +626,31 @@ void RasterizerGPU::Impl::run_rop_ubershader(CommandBuffer &cmd)
 
 	if (features.compute_shader_derivative_features.computeDerivativeGroupQuads)
 	{
-		cmd.set_program("assets://shaders/rop_ubershader.comp", {{"DERIVATIVE_GROUP_QUAD", 1}, {"SUBGROUP", 0}});
+		cmd.set_program("assets://shaders/rop_ubershader.comp", {
+			{"DERIVATIVE_GROUP_QUAD", 1},
+			{"SUBGROUP", 0},
+			{"TILE_SIZE", int(TILE_SIZE)},
+			{"TILE_SIZE_SQUARE", int(TILE_SIZE * TILE_SIZE)}
+		});
 	}
 	else if (features.compute_shader_derivative_features.computeDerivativeGroupLinear)
 	{
-		cmd.set_program("assets://shaders/rop_ubershader.comp", {{"DERIVATIVE_GROUP_LINEAR", 1}, {"SUBGROUP", 0}});
+		cmd.set_program("assets://shaders/rop_ubershader.comp", {
+				{"DERIVATIVE_GROUP_LINEAR", 1},
+				{"SUBGROUP", 0},
+				{"TILE_SIZE", int(TILE_SIZE)},
+				{"TILE_SIZE_SQUARE", int(TILE_SIZE * TILE_SIZE)}
+		});
 	}
 	else if (subgroup && (features.subgroup_properties.supportedOperations & required) == required &&
 	         (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
 	         can_support_minimum_subgroup_size(4))
 	{
-		cmd.set_program("assets://shaders/rop_ubershader.comp", {{"SUBGROUP", 1}});
+		cmd.set_program("assets://shaders/rop_ubershader.comp", {
+				{"SUBGROUP", 1},
+				{"TILE_SIZE", int(TILE_SIZE)},
+				{"TILE_SIZE_SQUARE", int(TILE_SIZE * TILE_SIZE)}
+		});
 
 		if (supports_subgroup_size_control(4, 128))
 		{
@@ -629,9 +659,15 @@ void RasterizerGPU::Impl::run_rop_ubershader(CommandBuffer &cmd)
 		}
 	}
 	else
-		cmd.set_program("assets://shaders/rop_ubershader.comp", {{"SUBGROUP", 0}});
+	{
+		cmd.set_program("assets://shaders/rop_ubershader.comp", {
+				{"SUBGROUP", 0},
+				{"TILE_SIZE", int(TILE_SIZE)},
+				{"TILE_SIZE_SQUARE", int(TILE_SIZE * TILE_SIZE)}
+		});
+	}
 
-	cmd.dispatch((width + TILE_WIDTH - 1) / TILE_WIDTH, (height + TILE_HEIGHT - 1) / TILE_HEIGHT, 1);
+	cmd.dispatch((width + TILE_SIZE - 1) / TILE_SIZE, (height + TILE_SIZE - 1) / TILE_SIZE, 1);
 	cmd.end_region();
 	cmd.enable_subgroup_size_control(false);
 }
@@ -639,7 +675,10 @@ void RasterizerGPU::Impl::run_rop_ubershader(CommandBuffer &cmd)
 void RasterizerGPU::Impl::run_rop(CommandBuffer &cmd)
 {
 	cmd.begin_region("run-rop");
-	cmd.set_program("assets://shaders/rop.comp");
+	cmd.set_program("assets://shaders/rop.comp", {
+		{"TILE_SIZE", int(TILE_SIZE)}
+	});
+
 	cmd.set_storage_buffer(0, 0, *color_buffer);
 	cmd.set_storage_buffer(0, 1, *depth_buffer);
 	cmd.set_storage_buffer(0, 2, *binning.mask_buffer[tile_instance_data.index]);
@@ -650,7 +689,7 @@ void RasterizerGPU::Impl::run_rop(CommandBuffer &cmd)
 	cmd.set_storage_buffer(0, 7, *tile_count.tile_offset[tile_instance_data.index]);
 	cmd.set_uniform_buffer(0, 8, *staging.render_state_index_gpu);
 	cmd.set_uniform_buffer(0, 9, *staging.render_state_gpu);
-	cmd.dispatch((width + TILE_WIDTH - 1) / TILE_WIDTH, (height + TILE_HEIGHT - 1) / TILE_HEIGHT, 1);
+	cmd.dispatch((width + TILE_SIZE - 1) / TILE_SIZE, (height + TILE_SIZE - 1) / TILE_SIZE, 1);
 	cmd.end_region();
 }
 
@@ -851,13 +890,13 @@ void RasterizerGPU::Impl::init_tile_buffers()
 	             VK_BUFFER_USAGE_TRANSFER_DST_BIT |
 	             VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 
-	info.size = MAX_NUM_TILE_INSTANCES * TILE_WIDTH * TILE_HEIGHT * sizeof(uint32_t);
+	info.size = MAX_NUM_TILE_INSTANCES * TILE_SIZE * TILE_SIZE * sizeof(uint32_t);
 	for (auto &color : tile_instance_data.color)
 		color = device->create_buffer(info);
-	info.size = MAX_NUM_TILE_INSTANCES * TILE_WIDTH * TILE_HEIGHT * sizeof(uint16_t);
+	info.size = MAX_NUM_TILE_INSTANCES * TILE_SIZE * TILE_SIZE * sizeof(uint16_t);
 	for (auto &depth : tile_instance_data.depth)
 		depth = device->create_buffer(info);
-	info.size = MAX_NUM_TILE_INSTANCES * TILE_WIDTH * TILE_HEIGHT * sizeof(uint8_t);
+	info.size = MAX_NUM_TILE_INSTANCES * TILE_SIZE * TILE_SIZE * sizeof(uint8_t);
 	for (auto &flags : tile_instance_data.flags)
 		flags = device->create_buffer(info);
 }

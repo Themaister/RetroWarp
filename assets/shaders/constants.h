@@ -9,8 +9,13 @@ const int TILE_BINNING_STRIDE = MAX_PRIMITIVES / 32;
 const int TILE_BINNING_STRIDE_COARSE = TILE_BINNING_STRIDE / 32;
 const int MAX_WIDTH = 2048;
 const int MAX_HEIGHT = 2048;
-const int TILE_WIDTH = 8;
-const int TILE_HEIGHT = 8;
+
+#ifndef TILE_SIZE
+#error "Must define TILE_SIZE"
+#endif
+
+const int TILE_WIDTH = TILE_SIZE;
+const int TILE_HEIGHT = TILE_SIZE;
 const int MAX_TILES_X = MAX_WIDTH / TILE_WIDTH;
 const int MAX_TILES_Y = MAX_HEIGHT / TILE_HEIGHT;
 const int TILE_DOWNSAMPLE = 8;
