@@ -141,7 +141,7 @@ struct RasterizerGPU::Impl
 	void run_rop_ubershader(CommandBuffer &cmd);
 
 	bool can_support_minimum_subgroup_size(unsigned size) const;
-	bool supports_subgroup_size_control() const;
+	bool supports_subgroup_size_control(uint32_t minimum_size, uint32_t maximum_size) const;
 };
 
 struct FBInfo
@@ -403,7 +403,7 @@ void RasterizerGPU::Impl::binning_low_res_prepass(CommandBuffer &cmd)
 		cmd.set_specialization_constant_mask(1);
 		cmd.set_specialization_constant(0, subgroup_size);
 
-		if (supports_subgroup_size_control())
+		if (supports_subgroup_size_control(32, subgroup_size))
 		{
 			cmd.enable_subgroup_size_control(true);
 			cmd.set_subgroup_size_log2(true, 5, trailing_zeroes(subgroup_size));
@@ -461,7 +461,7 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd, bool ubershader)
 		cmd.set_specialization_constant_mask(1);
 		cmd.set_specialization_constant(0, subgroup_size);
 
-		if (supports_subgroup_size_control())
+		if (supports_subgroup_size_control(32, subgroup_size))
 		{
 			cmd.enable_subgroup_size_control(true);
 			cmd.set_subgroup_size_log2(true, 5, trailing_zeroes(subgroup_size));
@@ -488,32 +488,29 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd, bool ubershader)
 
 bool RasterizerGPU::Impl::can_support_minimum_subgroup_size(unsigned size) const
 {
-	// Vendor specific. AMD and NV have fixed subgroup sizes, no need to check for extension.
-	uint32_t vendor_id = device->get_gpu_properties().vendorID;
-	if (vendor_id == VENDOR_ID_AMD && size <= 64)
-		return true;
-	else if (vendor_id == VENDOR_ID_NVIDIA && size <= 32)
-		return true;
-
-	if (!supports_subgroup_size_control())
-		return false;
-
-	auto &features = device->get_device_features();
-
-	if (size > features.subgroup_size_control_properties.maxSubgroupSize)
-		return false;
-
-	return true;
+	return supports_subgroup_size_control(size, device->get_device_features().subgroup_properties.subgroupSize);
 }
 
-bool RasterizerGPU::Impl::supports_subgroup_size_control() const
+bool RasterizerGPU::Impl::supports_subgroup_size_control(uint32_t minimum_size, uint32_t maximum_size) const
 {
 	auto &features = device->get_device_features();
 
-	if ((features.subgroup_size_control_properties.requiredSubgroupSizeStages & VK_SHADER_STAGE_COMPUTE_BIT) == 0)
-		return false;
 	if (!features.subgroup_size_control_features.computeFullSubgroups)
 		return false;
+
+	bool use_varying = minimum_size <= features.subgroup_size_control_properties.minSubgroupSize &&
+	                   maximum_size >= features.subgroup_size_control_properties.maxSubgroupSize;
+
+	if (!use_varying)
+	{
+		bool outside_range = minimum_size > features.subgroup_size_control_properties.maxSubgroupSize ||
+		                     maximum_size < features.subgroup_size_control_properties.minSubgroupSize;
+		if (outside_range)
+			return false;
+
+		if ((features.subgroup_size_control_properties.requiredSubgroupSizeStages & VK_SHADER_STAGE_COMPUTE_BIT) == 0)
+			return false;
+	}
 
 	return true;
 }
@@ -548,7 +545,7 @@ void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 	         can_support_minimum_subgroup_size(4))
 	{
 		cmd.set_program("assets://shaders/combiner.comp", { {"SUBGROUP", 1} });
-		if (supports_subgroup_size_control())
+		if (supports_subgroup_size_control(4, 128))
 		{
 			cmd.set_subgroup_size_log2(true, 2, 7);
 			cmd.enable_subgroup_size_control(true);
@@ -625,7 +622,7 @@ void RasterizerGPU::Impl::run_rop_ubershader(CommandBuffer &cmd)
 	{
 		cmd.set_program("assets://shaders/rop_ubershader.comp", {{"SUBGROUP", 1}});
 
-		if (supports_subgroup_size_control())
+		if (supports_subgroup_size_control(4, 128))
 		{
 			cmd.set_subgroup_size_log2(true, 2, 7);
 			cmd.enable_subgroup_size_control(true);
