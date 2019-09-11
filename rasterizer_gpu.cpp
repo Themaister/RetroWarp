@@ -464,7 +464,7 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd, bool ubershader)
 		cmd.set_storage_buffer(0, 6, *tile_count.tile_offset[tile_instance_data.index]);
 		cmd.set_storage_buffer(0, 7, *raster_work.item_count_per_variant);
 		cmd.set_storage_buffer(0, 8, *raster_work.work_list_per_variant);
-		cmd.set_uniform_buffer(0, 9, *staging.state_index_gpu);
+		cmd.set_storage_buffer(0, 9, *staging.state_index_gpu);
 	}
 
 	auto &features = device->get_device_features();
@@ -548,7 +548,7 @@ void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 	cmd.set_storage_buffer(0, 5, *staging.attributes_gpu);
 	cmd.set_uniform_buffer(0, 6, *staging.render_state_index_gpu);
 	cmd.set_uniform_buffer(0, 7, *staging.render_state_gpu);
-	cmd.set_uniform_buffer(0, 8, *vram_buffer);
+	cmd.set_storage_buffer(0, 8, *vram_buffer);
 
 	auto &features = device->get_device_features();
 	uint32_t subgroup_size = features.subgroup_properties.subgroupSize;
@@ -599,17 +599,12 @@ void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 		});
 	}
 
-#if 0
-	for (unsigned variant = 0; variant < state.state_count; variant++)
-	{
-		cmd.set_storage_buffer(0, 0, *raster_work.work_list_per_variant,
-		                       variant * (MAX_NUM_TILE_INSTANCES + 1) * sizeof(TileRasterWork),
-		                       (MAX_NUM_TILE_INSTANCES + 1) * sizeof(TileRasterWork));
-		assert(state.image_views[variant]);
-		cmd.set_texture(1, 0, *state.image_views[variant], StockSampler::TrilinearWrap);
-		cmd.dispatch_indirect(*raster_work.item_count_per_variant, 16 * variant);
-	}
-#endif
+	// HACK: We just have one shader variant for now ...
+	unsigned variant = 0;
+	cmd.set_storage_buffer(0, 0, *raster_work.work_list_per_variant,
+			variant * (MAX_NUM_TILE_INSTANCES + 1) * sizeof(TileRasterWork),
+			(MAX_NUM_TILE_INSTANCES + 1) * sizeof(TileRasterWork));
+	cmd.dispatch_indirect(*raster_work.item_count_per_variant, 16 * variant);
 
 	cmd.end_region();
 	cmd.enable_subgroup_size_control(false);
@@ -1236,7 +1231,7 @@ void RasterizerGPU::Impl::queue_primitive(const PrimitiveSetup &setup)
 
 	staging.mapped_positions[staging.count] = setup.pos;
 	staging.mapped_attributes[staging.count] = setup.attr;
-	//staging.mapped_state_index[staging.count] = current_state;
+	staging.mapped_state_index[staging.count] = 0;
 	staging.mapped_render_state_index[staging.count] = current_render_state;
 
 	staging.count++;
