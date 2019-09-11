@@ -1,33 +1,27 @@
 #version 450
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_8bit_storage : require
-#extension GL_EXT_samplerless_texture_functions : require
 #extension GL_EXT_scalar_block_layout : require
 layout(local_size_x = TILE_SIZE, local_size_y = TILE_SIZE) in;
 
 #include "constants.h"
 #include "fb_info.h"
 
-#define RENDER_STATE_INDEX_BUFFER 8
-#define RENDER_STATE_BUFFER 9
+#define RENDER_STATE_INDEX_BUFFER 7
+#define RENDER_STATE_BUFFER 8
 #include "rop.h"
 
-layout(std430, set = 0, binding = 0) buffer ColorFramebuffer
+layout(std430, set = 0, binding = 0) buffer VRAM
 {
-    u8vec4 color_data[];
+    uint16_t vram_data[];
 };
 
-layout(std430, set = 0, binding = 1) buffer DepthFramebuffer
-{
-    uint16_t depth_data[];
-};
-
-layout(std430, set = 0, binding = 2) readonly buffer Binning
+layout(std430, set = 0, binding = 1) readonly buffer Binning
 {
     uint binning_bitmask[];
 };
 
-layout(std430, set = 0, binding = 3) readonly buffer CoarseBinning
+layout(std430, set = 0, binding = 2) readonly buffer CoarseBinning
 {
     uint coarse_binning_bitmask[];
 };
@@ -47,22 +41,22 @@ struct FlagTile
     uint8_t flag[TILE_HEIGHT * TILE_WIDTH];
 };
 
-layout(std430, set = 0, binding = 4) readonly buffer Color
+layout(std430, set = 0, binding = 3) readonly buffer Color
 {
     ColorTile color_tiles[];
 };
 
-layout(std430, set = 0, binding = 5) readonly buffer Depth
+layout(std430, set = 0, binding = 4) readonly buffer Depth
 {
     DepthTile depth_tiles[];
 };
 
-layout(std430, set = 0, binding = 6) readonly buffer Flags
+layout(std430, set = 0, binding = 5) readonly buffer Flags
 {
     FlagTile flag_tiles[];
 };
 
-layout(std430, set = 0, binding = 7) readonly buffer TileOffsets
+layout(std430, set = 0, binding = 6) readonly buffer TileOffsets
 {
     uint16_t tile_offsets[];
 };
@@ -70,11 +64,15 @@ layout(std430, set = 0, binding = 7) readonly buffer TileOffsets
 void main()
 {
     uvec2 coord = gl_GlobalInvocationID.xy;
-    if (any(greaterThanEqual(coord, fb_info.resolution)))
-        return;
+    int x = int(coord.x);
+    int y = int(coord.y);
+    int pixel_index_color = (x + y * fb_info.color_stride + fb_info.color_offset) & ((VRAM_SIZE >> 1) - 1);
+    int pixel_index_depth = (x + y * fb_info.depth_stride + fb_info.depth_offset) & ((VRAM_SIZE >> 1) - 1);
 
-    int pixel_index = int(coord.x) + int(coord.y) * fb_info.fb_stride;
-    set_initial_rop(uvec4(color_data[pixel_index]), uint(depth_data[pixel_index]));
+    if (all(lessThan(coord, uvec2(fb_info.color_width, fb_info.color_height))))
+        set_initial_rop_color(uint(vram_data[pixel_index_color]));
+    if (all(lessThan(coord, uvec2(fb_info.depth_width, fb_info.depth_height))))
+        set_initial_rop_depth(uint(vram_data[pixel_index_depth]));
 
     ivec2 tile = ivec2(gl_WorkGroupID.xy);
     int linear_tile = tile.x + tile.y * MAX_TILES_X;
@@ -106,7 +104,7 @@ void main()
                     uint variant = get_rop_state_variant(mask_index * 32 + i);
                     uint z = uint(depth_tiles[tile_instance].depth[gl_LocalInvocationIndex]);
                     if (rop_depth_test(z, variant))
-                        rop_blend(uvec4(color_tiles[tile_instance].color[gl_LocalInvocationIndex]), variant);
+                        rop_blend(uvec4(color_tiles[tile_instance].color[gl_LocalInvocationIndex]), variant, x, y);
                 }
 
                 tile_instance++;
@@ -114,6 +112,11 @@ void main()
         }
     }
 
-    color_data[pixel_index] = u8vec4(get_current_color());
-    depth_data[pixel_index] = uint16_t(get_current_depth());
+    if (all(lessThan(coord, uvec2(fb_info.color_width, fb_info.color_height))))
+        if (get_rop_dirty_color())
+            vram_data[pixel_index_color] = uint16_t(get_current_color());
+
+    if (all(lessThan(coord, uvec2(fb_info.depth_width, fb_info.depth_height))))
+        if (get_rop_dirty_depth())
+            vram_data[pixel_index_depth] = uint16_t(get_current_depth());
 }

@@ -717,22 +717,23 @@ void RasterizerGPU::Impl::run_rop_ubershader(CommandBuffer &cmd)
 
 void RasterizerGPU::Impl::run_rop(CommandBuffer &cmd)
 {
+	uint32_t width = std::max(color.width, depth.width);
+	uint32_t height = std::max(color.height, depth.height);
 	cmd.begin_region("run-rop");
 	cmd.set_program("assets://shaders/rop.comp", {
 		{"TILE_SIZE", tile_size}
 	});
 
-	//cmd.set_storage_buffer(0, 0, *color_buffer);
-	//cmd.set_storage_buffer(0, 1, *depth_buffer);
-	cmd.set_storage_buffer(0, 2, *binning.mask_buffer[tile_instance_data.index]);
-	cmd.set_storage_buffer(0, 3, *binning.mask_buffer_coarse[tile_instance_data.index]);
-	cmd.set_storage_buffer(0, 4, *tile_instance_data.color[tile_instance_data.index]);
-	cmd.set_storage_buffer(0, 5, *tile_instance_data.depth[tile_instance_data.index]);
-	cmd.set_storage_buffer(0, 6, *tile_instance_data.flags[tile_instance_data.index]);
-	cmd.set_storage_buffer(0, 7, *tile_count.tile_offset[tile_instance_data.index]);
-	cmd.set_uniform_buffer(0, 8, *staging.render_state_index_gpu);
-	cmd.set_uniform_buffer(0, 9, *staging.render_state_gpu);
-	//cmd.dispatch((width + tile_size - 1) / tile_size, (height + tile_size - 1) / tile_size, 1);
+	cmd.set_storage_buffer(0, 0, *vram_buffer);
+	cmd.set_storage_buffer(0, 1, *binning.mask_buffer[tile_instance_data.index]);
+	cmd.set_storage_buffer(0, 2, *binning.mask_buffer_coarse[tile_instance_data.index]);
+	cmd.set_storage_buffer(0, 3, *tile_instance_data.color[tile_instance_data.index]);
+	cmd.set_storage_buffer(0, 4, *tile_instance_data.depth[tile_instance_data.index]);
+	cmd.set_storage_buffer(0, 5, *tile_instance_data.flags[tile_instance_data.index]);
+	cmd.set_storage_buffer(0, 6, *tile_count.tile_offset[tile_instance_data.index]);
+	cmd.set_uniform_buffer(0, 7, *staging.render_state_index_gpu);
+	cmd.set_uniform_buffer(0, 8, *staging.render_state_gpu);
+	cmd.dispatch((width + tile_size - 1) / tile_size, (height + tile_size - 1) / tile_size, 1);
 	cmd.end_region();
 }
 

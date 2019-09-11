@@ -73,8 +73,13 @@ uvec4 sample_texture(uint variant_index, vec2 f_uv, float f_lod)
 
 	ivec2 base_uv = ivec2(round(f_uv * 32.0));
 	uvec4 sample_l0 = sample_texture_lod(variant_index, base_uv, a_lod);
-	uvec4 sample_l1 = sample_texture_lod(variant_index, base_uv, b_lod);
-	return filter_trilinear(sample_l0, sample_l1, lod_frac);
+	uvec4 sample_l1 = uvec4(0);
+	if (lod_frac != 0)
+	{
+		sample_l1 = sample_texture_lod(variant_index, base_uv, b_lod);
+		sample_l0 = filter_trilinear(sample_l0, sample_l1, lod_frac);
+	}
+	return sample_l0;
 }
 
 #endif

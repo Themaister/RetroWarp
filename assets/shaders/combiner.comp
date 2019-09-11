@@ -68,8 +68,6 @@ layout(std430, set = 0, binding = 3) writeonly buffer Flags
     FlagTile flag_tiles[];
 };
 
-layout(set = 1, binding = 0) uniform sampler2D uTexture;
-
 #if !SUBGROUP && !defined(DERIVATIVE_GROUP_LINEAR) && !defined(DERIVATIVE_GROUP_QUAD)
 shared float shared_u[gl_WorkGroupSize.x];
 shared float shared_v[gl_WorkGroupSize.x];
@@ -156,8 +154,7 @@ void main()
 
         f_width = max(f_width, 1.0);
         float f_lod = log2(f_width);
-        f_uv /= textureSize(uTexture, 0).xy;
-        tex = uvec4(round(255.0 * textureLod(uTexture, f_uv, f_lod)));
+        tex = sample_texture(render_variant, f_uv, f_lod);
     }
 
     uint alpha = uint(round(255.0 * clamp(tex.a, 0.0, 1.0)));
