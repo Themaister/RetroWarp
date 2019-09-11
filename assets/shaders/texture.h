@@ -15,17 +15,29 @@ uvec4 filter_vert(uvec4 a, uvec4 b, int l)
 	return (ret + 512u) >> 10u;
 }
 
-uvec4 sample_texture(uint variant_index, vec2 f_uv, float f_lod)
+uvec4 filter_bilinear(uint sample0, uint sample1, uint sample2, uint sample3, ivec2 l)
+{
+	uvec4 tex_top = filter_horiz(expand_argb1555(unpack_argb1555(sample0)), expand_argb1555(unpack_argb1555(sample1)), l.x);
+	uvec4 tex_bottom = filter_horiz(expand_argb1555(unpack_argb1555(sample2)), expand_argb1555(unpack_argb1555(sample3)), l.x);
+	uvec4 tex = filter_vert(tex_top, tex_bottom, l.y);
+	return tex;
+}
+
+uvec4 filter_trilinear(uvec4 a, uvec4 b, int l)
+{
+	uvec4 res = a * uint(256 - l) + b * uint(l);
+	return (res + 0x80u) >> 8u;
+}
+
+uvec4 sample_texture_lod(uint variant_index, ivec2 base_uv, int lod)
 {
 	int tex_width = int(render_states[variant_index].texture_width);
-	int texture_max_lod = int(render_states[variant_index].texture_max_lod);
-	int lod = clamp(int(round(f_lod)), 0, texture_max_lod);
 	int mip_width = max(tex_width >> lod, 1);
 
 	ivec4 tex_clamp = ivec4(render_states[variant_index].texture_clamp) >> lod;
 	ivec2 tex_mask = ivec2(render_states[variant_index].texture_mask) >> lod;
 
-	ivec2 uv = ivec2(round(f_uv * 32.0));
+	ivec2 uv = base_uv;
 	uv >>= lod;
 	uv -= 16;
 	ivec2 wrap_uv = uv & 31;
@@ -47,10 +59,22 @@ uvec4 sample_texture(uint variant_index, vec2 f_uv, float f_lod)
 	uint sample2 = uint(vram_data[offset2]);
 	uint sample3 = uint(vram_data[offset3]);
 
-	uvec4 tex_top = filter_horiz(expand_argb1555(unpack_argb1555(sample0)), expand_argb1555(unpack_argb1555(sample1)), wrap_uv.x);
-	uvec4 tex_bottom = filter_horiz(expand_argb1555(unpack_argb1555(sample2)), expand_argb1555(unpack_argb1555(sample3)), wrap_uv.x);
-	uvec4 tex = filter_vert(tex_top, tex_bottom, wrap_uv.y);
+	uvec4 tex = filter_bilinear(sample0, sample1, sample2, sample3, wrap_uv);
 	return tex;
+}
+
+uvec4 sample_texture(uint variant_index, vec2 f_uv, float f_lod)
+{
+	int texture_max_lod = int(render_states[variant_index].texture_max_lod);
+	int lod = int(round(256.0 * max(f_lod, 0.0)));
+	int lod_frac = lod & 0xff;
+	int a_lod = clamp(lod >> 8, 0, texture_max_lod);
+	int b_lod = clamp((lod >> 8) + 1, 0, texture_max_lod);
+
+	ivec2 base_uv = ivec2(round(f_uv * 32.0));
+	uvec4 sample_l0 = sample_texture_lod(variant_index, base_uv, a_lod);
+	uvec4 sample_l1 = sample_texture_lod(variant_index, base_uv, b_lod);
+	return filter_trilinear(sample_l0, sample_l1, lod_frac);
 }
 
 #endif
