@@ -3,6 +3,7 @@
 
 #include "render_state.h"
 #include "pixel_conv.h"
+#include "dither.h"
 
 uvec4 current_color;
 uint current_z;
@@ -59,20 +60,6 @@ uvec4 blend_unorm(uvec4 src, uvec4 dst)
 {
 	uvec3 rgb = lerp_unorm8(dst.rgb, src.rgb, src.a);
 	return uvec4(rgb, src.a);
-}
-
-const uint DITHER_LUT[16] = uint[](
-	0, 4, 1, 5,
-	6, 2, 7, 3,
-	1, 5, 0, 4,
-	7, 3, 6, 2);
-
-uvec4 quantize_argb1555_dither(uvec4 color, int x, int y)
-{
-	int wrap_x = x & 3;
-	int wrap_y = y & 3;
-	int wrap_index = wrap_x + wrap_y * 4;
-	return quantize_argb1555(uvec4(min(color.rgb + DITHER_LUT[wrap_index], uvec3(255)), color.a));
 }
 
 void rop_blend(uvec4 color, uint variant, int x, int y)

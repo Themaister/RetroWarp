@@ -25,6 +25,8 @@
 using namespace RetroWarp;
 using namespace Granite;
 
+constexpr int TEXTURE_BASE_LEVEL = 1;
+
 struct TextureSampler : Sampler
 {
 	Texel sample(int u, int v) override
@@ -185,8 +187,8 @@ static void create_software_renderable(Entity *entity, RenderableComponent *rend
 	{
 		uint32_t width = sw->color_texture.get_layout().get_width();
 		uint32_t height = sw->color_texture.get_layout().get_height();
-		width = std::max((width >> 3), 1u);
-		height = std::max((height >> 3), 1u);
+		width = std::max((width >> TEXTURE_BASE_LEVEL), 1u);
+		height = std::max((height >> TEXTURE_BASE_LEVEL), 1u);
 
 		auto offset = mesh.attribute_layout[Util::ecast(MeshAttribute::UV)].offset;
 		for (unsigned i = 0; i < num_vertices; i++)
@@ -290,21 +292,22 @@ void SWRenderApplication::on_device_created(const Vulkan::DeviceCreatedEvent& e)
 	{
 		auto texture = SceneFormats::generate_mipmaps(*state_index_layout[i], 0);
 		auto &layout = texture.get_layout();
-		unsigned levels = std::min(layout.get_levels() - 3, 8u);
+		unsigned levels = std::min(layout.get_levels() - TEXTURE_BASE_LEVEL, 8u);
 
 		TextureDescriptor descriptor;
 		descriptor.texture_clamp = i16vec4(-0x8000, -0x8000, 0x7fff, 0x7fff);
-		descriptor.texture_mask = i16vec2(layout.get_width(3) - 1, layout.get_height(3) - 1);
+		descriptor.texture_mask = i16vec2(layout.get_width(TEXTURE_BASE_LEVEL) - 1,
+		                                  layout.get_height(TEXTURE_BASE_LEVEL) - 1);
 		descriptor.texture_max_lod = levels - 1;
-		descriptor.texture_width = layout.get_width(3);
+		descriptor.texture_width = layout.get_width(TEXTURE_BASE_LEVEL);
 
 		for (unsigned level = 0; level < levels; level++)
 		{
-			unsigned mip_width = layout.get_width(level + 3);
-			unsigned mip_height = layout.get_height(level + 3);
+			unsigned mip_width = layout.get_width(level + TEXTURE_BASE_LEVEL);
+			unsigned mip_height = layout.get_height(level + TEXTURE_BASE_LEVEL);
 			descriptor.texture_offset[level] = addr;
 			rasterizer_gpu.copy_texture_rgba8888_to_argb1555(addr,
-			                                                 static_cast<const uint32_t *>(layout.data(0, level + 3)),
+			                                                 static_cast<const uint32_t *>(layout.data(0, level + TEXTURE_BASE_LEVEL)),
 			                                                 mip_width * mip_height);
 			addr += mip_width * mip_height * 2;
 		}
