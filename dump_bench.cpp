@@ -372,7 +372,7 @@ int main(int argc, char **argv)
 
 	RasterizerGPU rasterizer;
 	rasterizer.init(device, subgroup, ubershader, async_compute, tile_size);
-	rasterizer.resize(width, height);
+	//rasterizer.resize(width, height);
 
 	auto start_run = Util::get_current_time_nsecs();
 	for (unsigned i = 0; i < 1000; i++)
@@ -397,5 +397,5 @@ int main(int argc, char **argv)
 	auto end_run = Util::get_current_time_nsecs();
 	LOGI("Total time: %.3f s\n", (end_run - start_run) * 1e-9);
 
-	rasterizer.save_canvas("canvas.png");
+	//rasterizer.save_canvas("canvas.png");
 }

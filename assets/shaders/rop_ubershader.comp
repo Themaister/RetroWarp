@@ -20,35 +20,30 @@ layout(local_size_x = TILE_SIZE_SQUARE) in;
 
 #include "combiner.h"
 
-#define RENDER_STATE_INDEX_BUFFER 7
-#define RENDER_STATE_BUFFER 8
+#define RENDER_STATE_INDEX_BUFFER 6
+#define RENDER_STATE_BUFFER 7
 #include "rop.h"
 
-#define PRIMITIVE_SETUP_POS_BUFFER 4
-#define PRIMITIVE_SETUP_ATTR_BUFFER 5
+#define PRIMITIVE_SETUP_POS_BUFFER 3
+#define PRIMITIVE_SETUP_ATTR_BUFFER 4
 #include "rasterizer_helpers.h"
 
-layout(std430, set = 0, binding = 6) uniform StateIndices
+layout(std430, set = 0, binding = 5) uniform StateIndices
 {
     uint8_t state_indices[MAX_PRIMITIVES];
 };
 
-layout(std430, set = 0, binding = 0) buffer ColorFramebuffer
+layout(std430, set = 0, binding = 0) buffer VRAM
 {
-    u8vec4 color_data[];
+    uint16_t vram_data[];
 };
 
-layout(std430, set = 0, binding = 1) buffer DepthFramebuffer
-{
-    uint16_t depth_data[];
-};
-
-layout(std430, set = 0, binding = 2) readonly buffer Binning
+layout(std430, set = 0, binding = 1) readonly buffer Binning
 {
     uint binning_bitmask[];
 };
 
-layout(std430, set = 0, binding = 3) readonly buffer CoarseBinning
+layout(std430, set = 0, binding = 2) readonly buffer CoarseBinning
 {
     uint coarse_binning_bitmask[];
 };
@@ -96,11 +91,14 @@ void main()
     int y = int(gl_WorkGroupID.y * uint(TILE_HEIGHT) + local_y);
 #endif
 
-    int pixel_index = x + y * fb_info.fb_stride;
+    int pixel_index_color = (x + y * fb_info.color_stride + fb_info.color_offset) & ((VRAM_SIZE >> 1) - 1);
+    int pixel_index_depth = (x + y * fb_info.depth_stride + fb_info.depth_offset) & ((VRAM_SIZE >> 1) - 1);
     uvec2 coord = uvec2(x, y);
 
-    if (all(lessThan(coord, fb_info.resolution)))
-        set_initial_rop(uvec4(color_data[pixel_index]), uint(depth_data[pixel_index]));
+    if (all(lessThan(coord, uvec2(fb_info.color_width, fb_info.color_height))))
+        set_initial_rop_color(uint(vram_data[pixel_index_color]));
+    if (all(lessThan(coord, uvec2(fb_info.depth_width, fb_info.depth_height))))
+        set_initial_rop_depth(uint(vram_data[pixel_index_depth]));
 
     for (int coarse_mask_index = 0; coarse_mask_index < primitive_coarse_mask_count; coarse_mask_index++)
     {
@@ -188,9 +186,11 @@ void main()
         }
     }
 
-    if (all(lessThan(coord, fb_info.resolution)))
-    {
-        color_data[pixel_index] = u8vec4(get_current_color());
-        depth_data[pixel_index] = uint16_t(get_current_depth());
-    }
+    if (all(lessThan(coord, uvec2(fb_info.color_width, fb_info.color_height))))
+        if (get_rop_dirty_color())
+            vram_data[pixel_index_color] = uint16_t(get_current_color());
+
+    if (all(lessThan(coord, uvec2(fb_info.depth_width, fb_info.depth_height))))
+        if (get_rop_dirty_depth())
+            vram_data[pixel_index_depth] = uint16_t(get_current_depth());
 }

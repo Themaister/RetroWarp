@@ -266,7 +266,8 @@ struct SWRenderApplication : Application, EventHandler
 void SWRenderApplication::on_device_created(const Vulkan::DeviceCreatedEvent& e)
 {
 	rasterizer_gpu.init(e.get_device(), subgroup, ubershader, async_compute, tile_size);
-	rasterizer_gpu.resize(width, height);
+	rasterizer_gpu.set_color_framebuffer(1024, width, height, width * 2);
+	rasterizer_gpu.set_depth_framebuffer(1024 + height * width * 2, width, height, width * 2);
 	rasterizer_gpu.set_rop_state(BlendState::Replace);
 	rasterizer_gpu.set_depth_state(DepthTest::LE, DepthWrite::On);
 	rasterizer_gpu.set_combiner_mode(COMBINER_MODE_TEX_MOD_COLOR | COMBINER_SAMPLE_BIT);
@@ -350,6 +351,7 @@ SWRenderApplication::SWRenderApplication(const std::string &path, bool subgroup_
 		  width(width_), height(height_), tile_size(tile_size_)
 {
 	loader.load_scene(path);
+	get_wsi().set_backbuffer_srgb(false);
 
 	auto &scene = loader.get_scene();
 	auto *renderables_holder = scene.get_entity_pool().get_component_group_holder<RenderableComponent, OpaqueComponent, RenderInfoComponent>();
@@ -407,7 +409,7 @@ void SWRenderApplication::render_frame(double frame_time, double)
 
 	rop.clear_color();
 	rop.clear_depth();
-	rasterizer_gpu.clear_color(0);
+	rasterizer_gpu.clear_color();
 	rasterizer_gpu.clear_depth();
 
 	mat4 vp = cam.get_projection() * cam.get_view();

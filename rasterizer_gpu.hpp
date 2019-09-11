@@ -61,7 +61,9 @@ public:
 	void set_constant_color(uint8_t r, uint8_t g, uint8_t b, uint8_t a);
 	void set_combiner_mode(CombinerFlags flags);
 
-	void resize(unsigned width, unsigned height);
+	void set_color_framebuffer(unsigned offset, unsigned width, unsigned height, unsigned stride);
+	void set_depth_framebuffer(unsigned offset, unsigned width, unsigned height, unsigned stride);
+
 	void clear_depth(uint16_t z = 0xffff);
 	void clear_color(uint32_t rgba = 0);
 	bool save_canvas(const char *path);

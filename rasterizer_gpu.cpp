@@ -19,14 +19,23 @@ struct BBox
 
 constexpr unsigned MAX_NUM_SHADER_STATE_INDICES = 64;
 constexpr unsigned MAX_NUM_RENDER_STATE_INDICES = 1024;
+constexpr unsigned VRAM_SIZE = 64 * 1024 * 1024;
 
 struct RasterizerGPU::Impl
 {
 	Device *device;
-	BufferHandle color_buffer;
-	BufferHandle depth_buffer;
-	unsigned width = 0;
-	unsigned height = 0;
+	BufferHandle vram_buffer;
+
+	struct Framebuffer
+	{
+		uint32_t offset = 0;
+		uint32_t width = 0;
+		uint32_t height = 0;
+		uint32_t stride = 0;
+	};
+
+	Framebuffer color, depth;
+
 	bool subgroup = false;
 	bool ubershader = false;
 	bool async_compute = false;
@@ -155,10 +164,19 @@ struct FBInfo
 {
 	uvec2 resolution;
 	uvec2 resolution_tiles;
-	uint32_t fb_stride;
 	uint32_t primitive_count;
 	uint32_t primitive_count_32;
 	uint32_t primitive_count_1024;
+
+	uint32_t color_offset;
+	uint32_t color_width;
+	uint32_t color_height;
+	uint32_t color_stride;
+
+	uint32_t depth_offset;
+	uint32_t depth_width;
+	uint32_t depth_height;
+	uint32_t depth_stride;
 };
 
 constexpr int MAX_PRIMITIVES = 0x4000;
@@ -384,6 +402,9 @@ void RasterizerGPU::Impl::clear_indirect_buffer(CommandBuffer &cmd)
 
 void RasterizerGPU::Impl::binning_low_res_prepass(CommandBuffer &cmd)
 {
+	uint32_t width = std::max(color.width, depth.width);
+	uint32_t height = std::max(color.height, depth.height);
+
 	cmd.begin_region("binning-low-res-prepass");
 	cmd.set_storage_buffer(0, 0, *binning.mask_buffer_low_res);
 	cmd.set_storage_buffer(0, 1, *staging.positions_gpu);
@@ -426,6 +447,8 @@ void RasterizerGPU::Impl::binning_low_res_prepass(CommandBuffer &cmd)
 
 void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd, bool ubershader)
 {
+	uint32_t width = std::max(color.width, depth.width);
+	uint32_t height = std::max(color.height, depth.height);
 	cmd.begin_region("binning-full-res");
 	cmd.set_storage_buffer(0, 0, *binning.mask_buffer[tile_instance_data.index]);
 	cmd.set_storage_buffer(0, 1, *staging.positions_gpu);
@@ -589,30 +612,43 @@ void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 
 void RasterizerGPU::Impl::set_fb_info(CommandBuffer &cmd)
 {
+	uint32_t width = std::max(color.width, depth.width);
+	uint32_t height = std::max(color.height, depth.height);
+
 	auto *fb_info = cmd.allocate_typed_constant_data<FBInfo>(2, 0, 1);
 	fb_info->resolution.x = width;
 	fb_info->resolution.y = height;
 	fb_info->resolution_tiles.x = (width + tile_size - 1) / tile_size;
 	fb_info->resolution_tiles.y = (height + tile_size - 1) / tile_size;
-	fb_info->fb_stride = width;
 	fb_info->primitive_count = staging.count;
 	uint32_t num_masks = (staging.count + 31) / 32;
 	fb_info->primitive_count_32 = num_masks;
 	fb_info->primitive_count_1024 = (staging.count + 1023) / 1024;
+
+	fb_info->color_offset = color.offset >> 1u;
+	fb_info->color_width = color.width;
+	fb_info->color_height = color.height;
+	fb_info->color_stride = color.stride >> 1u;
+	fb_info->depth_offset = depth.offset >> 1u;
+	fb_info->depth_width = depth.width;
+	fb_info->depth_height = depth.height;
+	fb_info->depth_stride = depth.stride >> 1u;
 }
 
 void RasterizerGPU::Impl::run_rop_ubershader(CommandBuffer &cmd)
 {
+	uint32_t width = std::max(color.width, depth.width);
+	uint32_t height = std::max(color.height, depth.height);
+
 	cmd.begin_region("run-rop");
-	cmd.set_storage_buffer(0, 0, *color_buffer);
-	cmd.set_storage_buffer(0, 1, *depth_buffer);
-	cmd.set_storage_buffer(0, 2, *binning.mask_buffer[tile_instance_data.index]);
-	cmd.set_storage_buffer(0, 3, *binning.mask_buffer_coarse[tile_instance_data.index]);
-	cmd.set_storage_buffer(0, 4, *staging.positions_gpu);
-	cmd.set_storage_buffer(0, 5, *staging.attributes_gpu);
-	cmd.set_uniform_buffer(0, 6, *staging.state_index_gpu);
-	cmd.set_uniform_buffer(0, 7, *staging.render_state_index_gpu);
-	cmd.set_uniform_buffer(0, 8, *staging.render_state_gpu);
+	cmd.set_storage_buffer(0, 0, *vram_buffer);
+	cmd.set_storage_buffer(0, 1, *binning.mask_buffer[tile_instance_data.index]);
+	cmd.set_storage_buffer(0, 2, *binning.mask_buffer_coarse[tile_instance_data.index]);
+	cmd.set_storage_buffer(0, 3, *staging.positions_gpu);
+	cmd.set_storage_buffer(0, 4, *staging.attributes_gpu);
+	cmd.set_uniform_buffer(0, 5, *staging.state_index_gpu);
+	cmd.set_uniform_buffer(0, 6, *staging.render_state_index_gpu);
+	cmd.set_uniform_buffer(0, 7, *staging.render_state_gpu);
 
 	for (unsigned i = 0; i < num_state_indices; i++)
 	{
@@ -680,8 +716,8 @@ void RasterizerGPU::Impl::run_rop(CommandBuffer &cmd)
 		{"TILE_SIZE", tile_size}
 	});
 
-	cmd.set_storage_buffer(0, 0, *color_buffer);
-	cmd.set_storage_buffer(0, 1, *depth_buffer);
+	//cmd.set_storage_buffer(0, 0, *color_buffer);
+	//cmd.set_storage_buffer(0, 1, *depth_buffer);
 	cmd.set_storage_buffer(0, 2, *binning.mask_buffer[tile_instance_data.index]);
 	cmd.set_storage_buffer(0, 3, *binning.mask_buffer_coarse[tile_instance_data.index]);
 	cmd.set_storage_buffer(0, 4, *tile_instance_data.color[tile_instance_data.index]);
@@ -690,7 +726,7 @@ void RasterizerGPU::Impl::run_rop(CommandBuffer &cmd)
 	cmd.set_storage_buffer(0, 7, *tile_count.tile_offset[tile_instance_data.index]);
 	cmd.set_uniform_buffer(0, 8, *staging.render_state_index_gpu);
 	cmd.set_uniform_buffer(0, 9, *staging.render_state_gpu);
-	cmd.dispatch((width + tile_size - 1) / tile_size, (height + tile_size - 1) / tile_size, 1);
+	//cmd.dispatch((width + tile_size - 1) / tile_size, (height + tile_size - 1) / tile_size, 1);
 	cmd.end_region();
 }
 
@@ -742,8 +778,8 @@ void RasterizerGPU::Impl::flush_ubershader()
 
 	t2 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 
-	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
-	             VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+	             VK_ACCESS_SHADER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
 	             VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT);
 
@@ -828,8 +864,8 @@ void RasterizerGPU::Impl::flush_split()
 
 	t3 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 
-	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
-	             VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+	             VK_ACCESS_SHADER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
 	             VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
 
@@ -974,6 +1010,13 @@ void RasterizerGPU::Impl::init(Device &device_, bool subgroup_, bool ubershader_
 	init_prefix_sum_buffers();
 	init_tile_buffers();
 	init_raster_work_buffers();
+
+	BufferCreateInfo vram_info = {};
+	vram_info.domain = BufferDomain::Device;
+	vram_info.size = VRAM_SIZE;
+	vram_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+	vram_info.misc = BUFFER_MISC_ZERO_INITIALIZE_BIT;
+	vram_buffer = device->create_buffer(vram_info);
 }
 
 RasterizerGPU::RasterizerGPU()
@@ -990,20 +1033,13 @@ void RasterizerGPU::set_texture(const ImageView &view)
 	impl->state.current_image = &view;
 }
 
-void RasterizerGPU::resize(unsigned width, unsigned height)
+void RasterizerGPU::set_color_framebuffer(unsigned offset, unsigned width, unsigned height, unsigned stride)
 {
 	flush();
-	impl->width = width;
-	impl->height = height;
-
-	BufferCreateInfo info;
-	info.domain = BufferDomain::Device;
-	info.size = width * height * sizeof(uint32_t);
-	info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-	impl->color_buffer = impl->device->create_buffer(info);
-
-	info.size = (width * height * sizeof(uint16_t) + 3) & ~3u;
-	impl->depth_buffer = impl->device->create_buffer(info);
+	impl->color.offset = offset;
+	impl->color.width = width;
+	impl->color.height = height;
+	impl->color.stride = stride;
 
 	impl->state.current_render_state.scissor_x = 0;
 	impl->state.current_render_state.scissor_y = 0;
@@ -1011,17 +1047,46 @@ void RasterizerGPU::resize(unsigned width, unsigned height)
 	impl->state.current_render_state.scissor_height = height;
 }
 
+void RasterizerGPU::set_depth_framebuffer(unsigned offset, unsigned width, unsigned height, unsigned stride)
+{
+	flush();
+	impl->depth.offset = offset;
+	impl->depth.width = width;
+	impl->depth.height = height;
+	impl->depth.stride = stride;
+}
+
 void RasterizerGPU::clear_depth(uint16_t z)
 {
 	flush();
 	auto cmd = impl->device->request_command_buffer();
-	cmd->barrier(VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-	             VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
-	             VK_PIPELINE_STAGE_TRANSFER_BIT,
-	             VK_ACCESS_TRANSFER_WRITE_BIT);
-
+	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+	             VK_ACCESS_SHADER_WRITE_BIT,
+	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+	             VK_ACCESS_SHADER_WRITE_BIT);
 	auto t0 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-	cmd->fill_buffer(*impl->depth_buffer, (uint32_t(z) << 16) | z);
+	cmd->set_storage_buffer(0, 0, *impl->vram_buffer);
+	cmd->set_program("assets://shaders/clear_framebuffer.comp",
+	                 {{ "TILE_SIZE", impl->tile_size }});
+
+	struct Registers
+	{
+		uint32_t offset;
+		uint32_t width;
+		uint32_t height;
+		uint32_t stride;
+		uint32_t value;
+	} registers;
+
+	registers.offset = impl->depth.offset >> 1;
+	registers.width = impl->depth.width;
+	registers.height = impl->depth.height;
+	registers.stride = impl->depth.stride >> 1;
+	registers.value = z;
+	cmd->push_constants(&registers, 0, sizeof(registers));
+
+	cmd->dispatch((registers.width + 15) / 16, (registers.height + 15) / 16, 1);
+
 	auto t1 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 	impl->device->register_time_interval(t0, t1, "clear-depth");
 	impl->device->submit(cmd);
@@ -1031,12 +1096,33 @@ void RasterizerGPU::clear_color(uint32_t rgba)
 {
 	flush();
 	auto cmd = impl->device->request_command_buffer();
-	cmd->barrier(VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-	             VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
-	             VK_PIPELINE_STAGE_TRANSFER_BIT,
-	             VK_ACCESS_TRANSFER_WRITE_BIT);
+	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+	             VK_ACCESS_SHADER_WRITE_BIT,
+	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+	             VK_ACCESS_SHADER_WRITE_BIT);
 	auto t0 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-	cmd->fill_buffer(*impl->color_buffer, rgba);
+	cmd->set_storage_buffer(0, 0, *impl->vram_buffer);
+	cmd->set_program("assets://shaders/clear_framebuffer.comp",
+	                 {{ "TILE_SIZE", impl->tile_size }});
+
+	struct Registers
+	{
+		uint32_t offset;
+		uint32_t width;
+		uint32_t height;
+		uint32_t stride;
+		uint32_t value;
+	} registers;
+
+	registers.offset = impl->color.offset >> 1;
+	registers.width = impl->color.width;
+	registers.height = impl->color.height;
+	registers.stride = impl->color.stride >> 1;
+	registers.value = rgba;
+	cmd->push_constants(&registers, 0, sizeof(registers));
+
+	cmd->dispatch((registers.width + 15) / 16, (registers.height + 15) / 16, 1);
+
 	auto t1 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 	impl->device->register_time_interval(t0, t1, "clear-color");
 	impl->device->submit(cmd);
@@ -1127,7 +1213,7 @@ ImageHandle RasterizerGPU::copy_to_framebuffer()
 
 ImageHandle RasterizerGPU::Impl::copy_to_framebuffer()
 {
-	ImageCreateInfo info = ImageCreateInfo::immutable_2d_image(width, height, VK_FORMAT_R8G8B8A8_SRGB);
+	ImageCreateInfo info = ImageCreateInfo::immutable_2d_image(color.width, color.height, VK_FORMAT_A1R5G5B5_UNORM_PACK16);
 	info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 	info.initial_layout = VK_IMAGE_LAYOUT_UNDEFINED;
 	auto image = device->create_image(info);
@@ -1138,7 +1224,7 @@ ImageHandle RasterizerGPU::Impl::copy_to_framebuffer()
 	cmd->image_barrier(*image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 	                   VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
 	                   VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-	cmd->copy_buffer_to_image(*image, *color_buffer, 0, {}, { width, height, 1 }, 0, 0,
+	cmd->copy_buffer_to_image(*image, *vram_buffer, color.offset, {}, { color.width, color.height, 1 }, color.stride / 2, 0,
 	                          { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 });
 	cmd->image_barrier(*image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 	                   VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -1147,6 +1233,7 @@ ImageHandle RasterizerGPU::Impl::copy_to_framebuffer()
 	return image;
 }
 
+#if 0
 bool RasterizerGPU::save_canvas(const char *path)
 {
 	impl->flush();
@@ -1160,9 +1247,9 @@ bool RasterizerGPU::save_canvas(const char *path)
 	BufferCreateInfo info;
 	info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 	info.domain = BufferDomain::CachedHost;
-	info.size = impl->width * impl->height * sizeof(uint32_t);
+	info.size = impl->color.width * impl->color.height * sizeof(uint16_t);
 	auto dst_buffer = impl->device->create_buffer(info);
-	cmd->copy_buffer(*dst_buffer, *impl->color_buffer);
+	cmd->copy_buffer(*dst_buffer, *impl->vram_buffer);
 	cmd->barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
 
@@ -1170,13 +1257,15 @@ bool RasterizerGPU::save_canvas(const char *path)
 	impl->device->submit(cmd, &fence);
 
 	fence->wait();
+
 	auto *ptr = static_cast<uint32_t *>(impl->device->map_host_buffer(*dst_buffer, MEMORY_ACCESS_READ_BIT | MEMORY_ACCESS_WRITE_BIT));
-	for (unsigned i = 0; i < impl->width * impl->height; i++)
+	for (unsigned i = 0; i < impl->color.width * impl->color.height; i++)
 		ptr[i] |= 0xff000000u;
-	bool res = stbi_write_png(path, impl->width, impl->height, 4, ptr, impl->width * 4);
+	bool res = stbi_write_png(path, impl->color.width, impl->color.height, 4, ptr, impl->color.width * 4);
 	impl->device->unmap_host_buffer(*dst_buffer, MEMORY_ACCESS_READ_BIT | MEMORY_ACCESS_WRITE_BIT);
 	return res;
 }
+#endif
 
 void RasterizerGPU::init(Device &device, bool subgroup, bool ubershader, bool async_compute, unsigned tile_size)
 {
