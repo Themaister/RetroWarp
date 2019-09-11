@@ -181,7 +181,7 @@ void main()
 
                 //rgba = vec4(255.0 * pow(float(current_z) / float(0xffff), 20.0));
 
-                rop_blend(urgba, variant);
+                rop_blend(urgba, variant, x, y);
             }
         }
     }

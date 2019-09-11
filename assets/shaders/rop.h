@@ -84,25 +84,39 @@ uvec4 blend_unorm(uvec4 src, uvec4 dst)
 	return uvec4(rgb, src.a);
 }
 
-void rop_blend(uvec4 color, uint variant)
+const uint DITHER_LUT[16] = uint[](
+	0, 4, 1, 5,
+	6, 2, 7, 3,
+	1, 5, 0, 4,
+	7, 3, 6, 2);
+
+uvec4 quantize_argb1555_dither(uvec4 color, int x, int y)
+{
+	int wrap_x = x & 3;
+	int wrap_y = y & 3;
+	int wrap_index = wrap_x + wrap_y * 4;
+	return quantize_argb1555(uvec4(min(color.rgb + DITHER_LUT[wrap_index], uvec3(255)), color.a));
+}
+
+void rop_blend(uvec4 color, uint variant, int x, int y)
 {
 	uint blend_state = uint(render_states[variant].blend_state);
 	switch (blend_state)
 	{
 	case ROP_BLEND_REPLACE:
-		current_color = quantize_argb1555(color);
+		current_color = quantize_argb1555_dither(color, x, y);
 		break;
 
 	case ROP_BLEND_ADDITIVE:
-		current_color = clamp(current_color + quantize_argb1555(color), uvec4(0), uvec4(31, 31, 31, 1));
+		current_color = clamp(current_color + quantize_argb1555_dither(color, x, y), uvec4(0), uvec4(31, 31, 31, 1));
 		break;
 
 	case ROP_BLEND_SUBTRACT:
-		current_color = uvec4(clamp(ivec4(current_color) - ivec4(quantize_argb1555(color)), ivec4(0), ivec4(31, 31, 31, 1)));
+		current_color = uvec4(clamp(ivec4(current_color) - ivec4(quantize_argb1555_dither(color, x, y)), ivec4(0), ivec4(31, 31, 31, 1)));
 		break;
 
 	case ROP_BLEND_ALPHA:
-		current_color = quantize_argb1555(blend_unorm(color, expand_argb1555(current_color)));
+		current_color = quantize_argb1555_dither(blend_unorm(color, expand_argb1555(current_color)), x, y);
 		break;
 	}
 
