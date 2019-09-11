@@ -79,8 +79,17 @@ struct RasterizerGPU::Impl
 		uint8_t blend_state = uint8_t(BlendState::Replace);
 		uint8_t combiner_state = 0;
 		uint8_t alpha_threshold = 0;
+
+		// 16 bytes.
+		i16vec4 texture_clamp = i16vec4(-0x8000, -0x8000, 0x7fff, 0x7fff);
+		i16vec2 texture_mask = i16vec2(255, 255);
+		int16_t texture_width = 256;
+		int16_t texture_max_lod = 7;
+
+		// 32 bytes.
+		uint32_t texture_offset[8] = {};
 	};
-	static_assert(sizeof(RenderState) == 16, "Sizeof render state must be 16.");
+	static_assert(sizeof(RenderState) == 64, "Sizeof render state must be 64.");
 
 	struct
 	{

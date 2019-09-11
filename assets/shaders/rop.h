@@ -2,6 +2,7 @@
 #define ROP_H_
 
 #include "render_state.h"
+#include "pixel_conv.h"
 
 uvec4 current_color;
 uint current_z;
@@ -30,30 +31,6 @@ bool get_rop_dirty_color()
 bool get_rop_dirty_depth()
 {
 	return dirty_depth;
-}
-
-uvec4 expand_argb1555(uvec4 color)
-{
-	return uvec4((color.rgb << 3u) | (color.rgb >> 2u), color.a * 0xffu);
-}
-
-uvec4 unpack_argb1555(uint color)
-{
-	uint r = (color >> 10u) & 31u;
-	uint g = (color >> 5u) & 31u;
-	uint b = (color >> 0u) & 31u;
-	uint a = (color >> 15u) & 1u;
-	return uvec4(r, g, b, a);
-}
-
-uint pack_argb1555(uvec4 color)
-{
-	return (color.r << 10u) | (color.g << 5u) | (color.b << 0u) | (color.a << 15u);
-}
-
-uvec4 quantize_argb1555(uvec4 color)
-{
-	return color >> uvec4(3u, 3u, 3u, 7u);
 }
 
 void set_initial_rop_color(uint color)

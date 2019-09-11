@@ -48,7 +48,9 @@ layout(std430, set = 0, binding = 2) readonly buffer CoarseBinning
     uint coarse_binning_bitmask[];
 };
 
-layout(set = 1, binding = 0) uniform sampler2D uTextures[16];
+#include "texture.h"
+
+//layout(set = 1, binding = 0) uniform sampler2D uTextures[16];
 
 #if !SUBGROUP && !defined(DERIVATIVE_GROUP_LINEAR) && !defined(DERIVATIVE_GROUP_QUAD)
 shared float shared_u[gl_WorkGroupSize.x];
@@ -161,8 +163,7 @@ void main()
 
                     f_width = max(f_width, 1.0);
                     float f_lod = log2(f_width);
-                    f_uv /= vec2(textureSize(uTextures[tex_index], 0));
-                    tex = uvec4(round(255.0 * textureLod(uTextures[tex_index], f_uv, f_lod)));
+                    tex = sample_texture(render_variant, f_uv, f_lod);
                 }
 
                 if (tex.a < uint(render_states[render_variant].alpha_threshold))
