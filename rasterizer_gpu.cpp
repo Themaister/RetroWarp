@@ -1275,7 +1275,6 @@ ImageHandle RasterizerGPU::Impl::copy_to_framebuffer()
 	return image;
 }
 
-#if 0
 bool RasterizerGPU::save_canvas(const char *path)
 {
 	impl->flush();
@@ -1287,27 +1286,53 @@ bool RasterizerGPU::save_canvas(const char *path)
 	             VK_ACCESS_TRANSFER_READ_BIT);
 
 	BufferCreateInfo info;
-	info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+	info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
 	info.domain = BufferDomain::CachedHost;
 	info.size = impl->color.width * impl->color.height * sizeof(uint16_t);
 	auto dst_buffer = impl->device->create_buffer(info);
-	cmd->copy_buffer(*dst_buffer, *impl->vram_buffer);
-	cmd->barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+	cmd->set_program("assets://shaders/read_framebuffer.comp", {{ "TILE_SIZE", impl->tile_size }});
+	cmd->set_storage_buffer(0, 0, *dst_buffer);
+	cmd->set_storage_buffer(0, 1, *impl->vram_buffer);
+	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
 	             VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
+
+	struct Registers
+	{
+		uint32_t offset;
+		uint32_t width;
+		uint32_t height;
+		uint32_t stride;
+	} registers;
+	registers.offset = impl->color.offset >> 1;
+	registers.width = impl->color.width;
+	registers.height = impl->color.height;
+	registers.stride = impl->color.stride >> 1;
+	cmd->push_constants(&registers, 0, sizeof(registers));
+
+	cmd->dispatch((impl->color.width + 15) / 16, (impl->color.height + 15) / 16, 1);
 
 	Fence fence;
 	impl->device->submit(cmd, &fence);
 
 	fence->wait();
 
-	auto *ptr = static_cast<uint32_t *>(impl->device->map_host_buffer(*dst_buffer, MEMORY_ACCESS_READ_BIT | MEMORY_ACCESS_WRITE_BIT));
+	std::vector<u8vec4> readback_result(impl->color.width * impl->color.height);
+
+	const auto unpack = [](uint16_t v) -> u8vec4 {
+		unsigned r = (v >> 10) & 31;
+		unsigned g = (v >> 5) & 31;
+		unsigned b = (v >> 0) & 31;
+		unsigned a = v >> 15;
+		return u8vec4((r << 3) | (r >> 2), (g << 3) | (g >> 2), (b << 3) | (b >> 2), 0xffu);
+	};
+
+	auto *ptr = static_cast<uint16_t *>(impl->device->map_host_buffer(*dst_buffer, MEMORY_ACCESS_READ_BIT));
 	for (unsigned i = 0; i < impl->color.width * impl->color.height; i++)
-		ptr[i] |= 0xff000000u;
-	bool res = stbi_write_png(path, impl->color.width, impl->color.height, 4, ptr, impl->color.width * 4);
-	impl->device->unmap_host_buffer(*dst_buffer, MEMORY_ACCESS_READ_BIT | MEMORY_ACCESS_WRITE_BIT);
+		readback_result[i] = unpack(ptr[i]);
+	bool res = stbi_write_png(path, impl->color.width, impl->color.height, 4, readback_result.data(), impl->color.width * 4);
+	impl->device->unmap_host_buffer(*dst_buffer, MEMORY_ACCESS_READ_BIT);
 	return res;
 }
-#endif
 
 void RasterizerGPU::init(Device &device, bool subgroup, bool ubershader, bool async_compute, unsigned tile_size)
 {

@@ -20,6 +20,9 @@
 #include "mesh_util.hpp"
 #include "application.hpp"
 #include "cli_parser.hpp"
+#include "texture_utils.hpp"
+
+constexpr int TEXTURE_BASE_LEVEL = 1;
 
 using namespace RetroWarp;
 using namespace Granite;
@@ -239,24 +242,49 @@ int main(int argc, char **argv)
 	Vulkan::Device device;
 	device.set_context(ctx);
 
-	std::vector<Vulkan::ImageHandle> textures(num_textures);
+	RasterizerGPU rasterizer;
+	rasterizer.init(device, subgroup, ubershader, async_compute, tile_size);
+
+	uint32_t addr = 0;
+	rasterizer.set_color_framebuffer(addr, width, height, width * 2);
+	addr += width * height * 2;
+	rasterizer.set_depth_framebuffer(addr, width, height, width * 2);
+	addr += width * height * 2;
+
+	std::vector<TextureDescriptor> texture_descriptors;
 	for (unsigned i = 0; i < num_textures; i++)
 	{
-		auto path = std::string(argv[1]) + ".tex." + std::to_string(i);
-		auto tex_file = load_texture_from_file(path, ColorSpace::Linear);
+		auto tex_path = std::string(argv[1]) + ".tex." + std::to_string(i);
+		auto tex_file = load_texture_from_file(tex_path, ColorSpace::Linear);
 		if (tex_file.empty())
 		{
 			LOGE("Failed to load texture.\n");
 			return EXIT_FAILURE;
 		}
+		tex_file = SceneFormats::generate_mipmaps(tex_file.get_layout(), 0);
+		auto &layout = tex_file.get_layout();
+		unsigned levels = std::min(layout.get_levels() - TEXTURE_BASE_LEVEL, 8u);
 
-		auto staging = device.create_image_staging_buffer(tex_file.get_layout());
-		auto info = Vulkan::ImageCreateInfo::immutable_2d_image(tex_file.get_layout().get_width(),
-		                                                        tex_file.get_layout().get_height(),
-		                                                        VK_FORMAT_R8G8B8A8_UNORM, true);
-		info.misc |= Vulkan::IMAGE_MISC_CONCURRENT_QUEUE_ASYNC_COMPUTE_BIT |
-		             Vulkan::IMAGE_MISC_CONCURRENT_QUEUE_GRAPHICS_BIT;
-		textures[i] = device.create_image_from_staging_buffer(info, &staging);
+		TextureDescriptor descriptor;
+
+		descriptor.texture_clamp = i16vec4(-0x8000, -0x8000, 0x7fff, 0x7fff);
+		descriptor.texture_mask = i16vec2(layout.get_width(TEXTURE_BASE_LEVEL) - 1,
+		                                  layout.get_height(TEXTURE_BASE_LEVEL) - 1);
+		descriptor.texture_max_lod = levels - 1;
+		descriptor.texture_width = layout.get_width(TEXTURE_BASE_LEVEL);
+
+		for (unsigned level = 0; level < levels; level++)
+		{
+			unsigned mip_width = layout.get_width(level + TEXTURE_BASE_LEVEL);
+			unsigned mip_height = layout.get_height(level + TEXTURE_BASE_LEVEL);
+			descriptor.texture_offset[level] = addr;
+			rasterizer.copy_texture_rgba8888_to_argb1555(addr,
+			                                             static_cast<const uint32_t *>(layout.data(0, level + TEXTURE_BASE_LEVEL)),
+			                                             mip_width * mip_height);
+			addr += mip_width * mip_height * 2;
+		}
+
+		texture_descriptors.push_back(descriptor);
 	}
 
 	struct Cache
@@ -370,10 +398,6 @@ int main(int argc, char **argv)
 		}
 	}
 
-	RasterizerGPU rasterizer;
-	rasterizer.init(device, subgroup, ubershader, async_compute, tile_size);
-	//rasterizer.resize(width, height);
-
 	auto start_run = Util::get_current_time_nsecs();
 	for (unsigned i = 0; i < 1000; i++)
 	{
@@ -382,7 +406,7 @@ int main(int argc, char **argv)
 		rasterizer.clear_color();
 		for (auto &command : commands)
 		{
-			rasterizer.set_texture(textures[command.state_index]->get_view());
+			rasterizer.set_texture_descriptor(texture_descriptors[command.state_index]);
 			rasterizer.set_combiner_mode(command.combiner_state);
 			rasterizer.set_constant_color(command.constant_color[0], command.constant_color[1], command.constant_color[2], command.constant_color[3]);
 			rasterizer.set_depth_state(command.depth_test, command.depth_write);
@@ -397,5 +421,5 @@ int main(int argc, char **argv)
 	auto end_run = Util::get_current_time_nsecs();
 	LOGI("Total time: %.3f s\n", (end_run - start_run) * 1e-9);
 
-	//rasterizer.save_canvas("canvas.png");
+	rasterizer.save_canvas("canvas.png");
 }

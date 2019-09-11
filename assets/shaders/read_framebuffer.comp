@@ -1,0 +1,34 @@
+#version 450
+#extension GL_EXT_shader_16bit_storage : require
+layout(local_size_x = 16, local_size_y = 16) in;
+
+#include "constants.h"
+
+layout(push_constant, std430) uniform Registers
+{
+    uint offset;
+    uint width;
+    uint height;
+    uint stride;
+} registers;
+
+layout(set = 0, binding = 0, std430) writeonly buffer VRAM
+{
+    uint16_t output_buffer[];
+};
+
+layout(set = 0, binding = 1, std430) readonly buffer Texture
+{
+    uint16_t vram[];
+};
+
+void main()
+{
+    if (all(lessThan(gl_GlobalInvocationID.xy, uvec2(registers.width, registers.height))))
+    {
+        uint index = registers.offset + gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * registers.stride;
+        index &= (VRAM_SIZE >> 1) - 1;
+        uint read_data = uint(vram[index]);
+        output_buffer[gl_GlobalInvocationID.y * registers.width + gl_GlobalInvocationID.x] = uint16_t(read_data);
+    }
+}
