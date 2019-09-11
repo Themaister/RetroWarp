@@ -79,15 +79,7 @@ struct RasterizerGPU::Impl
 		uint8_t blend_state = uint8_t(BlendState::Replace);
 		uint8_t combiner_state = 0;
 		uint8_t alpha_threshold = 0;
-
-		// 16 bytes.
-		i16vec4 texture_clamp = i16vec4(-0x8000, -0x8000, 0x7fff, 0x7fff);
-		i16vec2 texture_mask = i16vec2(255, 255);
-		int16_t texture_width = 256;
-		int16_t texture_max_lod = 7;
-
-		// 32 bytes.
-		uint32_t texture_offset[8] = {};
+		TextureDescriptor tex;
 	};
 	static_assert(sizeof(RenderState) == 64, "Sizeof render state must be 64.");
 
@@ -121,9 +113,9 @@ struct RasterizerGPU::Impl
 
 	struct
 	{
-		const ImageView *image_views[64] = {};
-		unsigned state_count = 0;
-		const ImageView *current_image = nullptr;
+		//const ImageView *image_views[64] = {};
+		//unsigned state_count = 0;
+		//const ImageView *current_image = nullptr;
 		RenderState last_render_state;
 		RenderState current_render_state;
 		unsigned render_state_count = 0;
@@ -209,7 +201,7 @@ void RasterizerGPU::Impl::reset_staging()
 {
 	staging = {};
 	state.render_state_count = 0;
-	state.state_count = 0;
+	//state.state_count = 0;
 }
 
 BBox RasterizerGPU::Impl::compute_bbox(const PrimitiveSetup &setup) const
@@ -606,6 +598,7 @@ void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 		});
 	}
 
+#if 0
 	for (unsigned variant = 0; variant < state.state_count; variant++)
 	{
 		cmd.set_storage_buffer(0, 0, *raster_work.work_list_per_variant,
@@ -615,6 +608,8 @@ void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 		cmd.set_texture(1, 0, *state.image_views[variant], StockSampler::TrilinearWrap);
 		cmd.dispatch_indirect(*raster_work.item_count_per_variant, 16 * variant);
 	}
+#endif
+
 	cmd.end_region();
 	cmd.enable_subgroup_size_control(false);
 }
@@ -659,11 +654,13 @@ void RasterizerGPU::Impl::run_rop_ubershader(CommandBuffer &cmd)
 	cmd.set_uniform_buffer(0, 6, *staging.render_state_index_gpu);
 	cmd.set_uniform_buffer(0, 7, *staging.render_state_gpu);
 
+#if 0
 	for (unsigned i = 0; i < num_state_indices; i++)
 	{
 		cmd.set_texture(1, i, i < state.state_count ? *state.image_views[i] : *state.image_views[0],
 		                StockSampler::TrilinearWrap);
 	}
+#endif
 
 	auto &features = device->get_device_features();
 	const VkSubgroupFeatureFlags required = VK_SUBGROUP_FEATURE_BASIC_BIT |
@@ -1037,9 +1034,9 @@ RasterizerGPU::~RasterizerGPU()
 {
 }
 
-void RasterizerGPU::set_texture(const ImageView &view)
+void RasterizerGPU::set_texture_descriptor(const TextureDescriptor &desc)
 {
-	impl->state.current_image = &view;
+	impl->state.current_render_state.tex = desc;
 }
 
 void RasterizerGPU::set_color_framebuffer(unsigned offset, unsigned width, unsigned height, unsigned stride)
@@ -1101,6 +1098,40 @@ void RasterizerGPU::clear_depth(uint16_t z)
 	impl->device->submit(cmd);
 }
 
+void RasterizerGPU::copy_texture_rgba8888_to_argb1555(uint32_t offset, const uint32_t *src, size_t count)
+{
+	flush();
+
+	BufferCreateInfo info = {};
+	info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+	info.domain = BufferDomain::Host;
+	info.size = count * sizeof(uint32_t);
+	auto buffer = impl->device->create_buffer(info, src);
+
+	auto cmd = impl->device->request_command_buffer();
+
+	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+	             VK_ACCESS_SHADER_WRITE_BIT,
+	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+	             VK_ACCESS_SHADER_WRITE_BIT);
+
+	cmd->set_storage_buffer(0, 0, *impl->vram_buffer);
+	cmd->set_storage_buffer(0, 1, *buffer);
+	cmd->set_program("assets://shaders/copy_framebuffer.comp",
+	                 {{ "TILE_SIZE", impl->tile_size }});
+
+	struct Registers
+	{
+		uint32_t offset;
+		uint32_t count;
+	} registers;
+	registers.offset = offset >> 1;
+	registers.count = count;
+	cmd->push_constants(&registers, 0, sizeof(registers));
+	cmd->dispatch((count + 63) / 64, 1, 1);
+	impl->device->submit(cmd);
+}
+
 void RasterizerGPU::clear_color(uint32_t rgba)
 {
 	flush();
@@ -1158,7 +1189,7 @@ void RasterizerGPU::set_scissor(int x, int y, int width, int height)
 void RasterizerGPU::Impl::queue_primitive(const PrimitiveSetup &setup)
 {
 	unsigned num_conservative_tiles = ubershader ? 0 : compute_num_conservative_tiles(setup);
-	bool state_changed = state.state_count != 0 && state.current_image != state.image_views[state.state_count - 1];
+	//bool state_changed = state.state_count != 0 && state.current_image != state.image_views[state.state_count - 1];
 	bool render_state_changed = memcmp(&state.current_render_state, &state.last_render_state, sizeof(RenderState)) != 0;
 
 	bool need_flush = false;
@@ -1166,8 +1197,8 @@ void RasterizerGPU::Impl::queue_primitive(const PrimitiveSetup &setup)
 		need_flush = true;
 	else if (staging.num_conservative_tile_instances + num_conservative_tiles > MAX_NUM_TILE_INSTANCES)
 		need_flush = true;
-	else if (state_changed && state.state_count == num_state_indices)
-		need_flush = true;
+	//else if (state_changed && state.state_count == num_state_indices)
+	//	need_flush = true;
 	else if (render_state_changed && state.render_state_count == MAX_NUM_RENDER_STATE_INDICES)
 		need_flush = true;
 
@@ -1180,6 +1211,7 @@ void RasterizerGPU::Impl::queue_primitive(const PrimitiveSetup &setup)
 	unsigned current_state;
 	unsigned current_render_state;
 
+#if 0
 	if (state.state_count == 0 || state_changed)
 	{
 		state.image_views[state.state_count] = state.current_image;
@@ -1188,6 +1220,7 @@ void RasterizerGPU::Impl::queue_primitive(const PrimitiveSetup &setup)
 	}
 	else
 		current_state = state.state_count - 1;
+#endif
 
 	if (state.render_state_count == 0 || render_state_changed)
 	{

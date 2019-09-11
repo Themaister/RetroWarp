@@ -1,0 +1,33 @@
+#version 450
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage : require
+layout(local_size_x = 64) in;
+
+#include "constants.h"
+#include "pixel_conv.h"
+
+layout(push_constant, std430) uniform Registers
+{
+    uint offset;
+    uint count;
+} registers;
+
+layout(set = 0, binding = 0, std430) writeonly buffer VRAM
+{
+    uint16_t vram[];
+};
+
+layout(set = 0, binding = 1, std430) readonly buffer Texture
+{
+    u8vec4 input_colors[];
+};
+
+void main()
+{
+    if (gl_GlobalInvocationID.x < registers.count)
+    {
+        uint index = registers.offset + gl_GlobalInvocationID.x;
+        index &= (VRAM_SIZE >> 1) - 1;
+        vram[index] = uint16_t(pack_argb1555(quantize_argb1555(uvec4(input_colors[gl_GlobalInvocationID.x]))));
+    }
+}

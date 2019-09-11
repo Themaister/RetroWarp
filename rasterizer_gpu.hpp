@@ -6,6 +6,7 @@
 #include "texture_format.hpp"
 #include <memory>
 #include "device.hpp"
+#include "math.hpp"
 
 namespace RetroWarp
 {
@@ -46,6 +47,18 @@ enum CombinerState
 };
 using CombinerFlags = uint8_t;
 
+struct TextureDescriptor
+{
+	// 16 bytes.
+	muglm::i16vec4 texture_clamp = muglm::i16vec4(-0x8000, -0x8000, 0x7fff, 0x7fff);
+	muglm::i16vec2 texture_mask = muglm::i16vec2(255, 255);
+	int16_t texture_width = 256;
+	int16_t texture_max_lod = 7;
+
+	// 32 bytes.
+	uint32_t texture_offset[8] = {};
+};
+
 class RasterizerGPU
 {
 public:
@@ -69,7 +82,9 @@ public:
 	bool save_canvas(const char *path);
 
 	void rasterize_primitives(const PrimitiveSetup *setup, size_t count);
-	void set_texture(const Vulkan::ImageView &view);
+
+	void set_texture_descriptor(const TextureDescriptor &desc);
+	void copy_texture_rgba8888_to_argb1555(uint32_t offset, const uint32_t *src, size_t count);
 
 	Vulkan::ImageHandle copy_to_framebuffer();
 

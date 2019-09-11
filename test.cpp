@@ -20,6 +20,7 @@
 #include "mesh_util.hpp"
 #include "application.hpp"
 #include "cli_parser.hpp"
+#include "texture_utils.hpp"
 
 using namespace RetroWarp;
 using namespace Granite;
@@ -107,6 +108,8 @@ struct SoftwareRenderableComponent : ComponentBase
 };
 
 static std::unordered_map<std::string, unsigned> state_index_map;
+static std::vector<const Vulkan::TextureFormatLayout *> state_index_layout;
+static std::vector<TextureDescriptor> texture_descriptors;
 
 static void create_software_renderable(Entity *entity, RenderableComponent *renderable)
 {
@@ -170,6 +173,7 @@ static void create_software_renderable(Entity *entity, RenderableComponent *rend
 		unsigned index = state_index_map.size();
 		state_index_map[mat.base_color.path] = index;
 		sw->state_index = index;
+		state_index_layout.push_back(&sw->color_texture.get_layout());
 	}
 	else
 	{
@@ -179,13 +183,18 @@ static void create_software_renderable(Entity *entity, RenderableComponent *rend
 
 	if (mesh.attribute_layout[Util::ecast(MeshAttribute::UV)].format == VK_FORMAT_R32G32_SFLOAT)
 	{
+		uint32_t width = sw->color_texture.get_layout().get_width();
+		uint32_t height = sw->color_texture.get_layout().get_height();
+		width = std::max((width >> 3), 1u);
+		height = std::max((height >> 3), 1u);
+
 		auto offset = mesh.attribute_layout[Util::ecast(MeshAttribute::UV)].offset;
 		for (unsigned i = 0; i < num_vertices; i++)
 		{
 			memcpy(&sw->vertices[i].u, mesh.attributes.data() + i * mesh.attribute_stride + offset, sizeof(float));
 			memcpy(&sw->vertices[i].v, mesh.attributes.data() + i * mesh.attribute_stride + offset + sizeof(float), sizeof(float));
-			sw->vertices[i].u = sw->vertices[i].u * float(sw->color_texture.get_layout().get_width());
-			sw->vertices[i].v = sw->vertices[i].v * float(sw->color_texture.get_layout().get_height());
+			sw->vertices[i].u = sw->vertices[i].u * float(width);
+			sw->vertices[i].v = sw->vertices[i].v * float(height);
 		}
 	}
 
@@ -266,11 +275,44 @@ struct SWRenderApplication : Application, EventHandler
 void SWRenderApplication::on_device_created(const Vulkan::DeviceCreatedEvent& e)
 {
 	rasterizer_gpu.init(e.get_device(), subgroup, ubershader, async_compute, tile_size);
-	rasterizer_gpu.set_color_framebuffer(1024, width, height, width * 2);
-	rasterizer_gpu.set_depth_framebuffer(1024 + height * width * 2, width, height, width * 2);
 	rasterizer_gpu.set_rop_state(BlendState::Replace);
 	rasterizer_gpu.set_depth_state(DepthTest::LE, DepthWrite::On);
 	rasterizer_gpu.set_combiner_mode(COMBINER_MODE_TEX_MOD_COLOR | COMBINER_SAMPLE_BIT);
+
+	uint32_t addr = 0;
+	rasterizer_gpu.set_color_framebuffer(addr, width, height, width * 2);
+	addr += width * height * 2;
+	rasterizer_gpu.set_depth_framebuffer(addr, width, height, width * 2);
+	addr += width * height * 2;
+
+	unsigned num_textures = state_index_layout.size();
+	for (unsigned i = 0; i < num_textures; i++)
+	{
+		auto texture = SceneFormats::generate_mipmaps(*state_index_layout[i], 0);
+		auto &layout = texture.get_layout();
+		unsigned levels = std::min(layout.get_levels() - 3, 8u);
+
+		TextureDescriptor descriptor;
+		descriptor.texture_clamp = i16vec4(-0x8000, -0x8000, 0x7fff, 0x7fff);
+		descriptor.texture_mask = i16vec2(layout.get_width(3) - 1, layout.get_height(3) - 1);
+		descriptor.texture_max_lod = levels - 1;
+		descriptor.texture_width = layout.get_width(3);
+
+		for (unsigned level = 0; level < levels; level++)
+		{
+			unsigned mip_width = layout.get_width(level + 3);
+			unsigned mip_height = layout.get_height(level + 3);
+			descriptor.texture_offset[level] = addr;
+			rasterizer_gpu.copy_texture_rgba8888_to_argb1555(addr,
+			                                                 static_cast<const uint32_t *>(layout.data(0, level + 3)),
+			                                                 mip_width * mip_height);
+			addr += mip_width * mip_height * 2;
+		}
+
+		texture_descriptors.push_back(descriptor);
+	}
+
+	LOGI("Allocated %u bytes.\n", addr);
 }
 
 void SWRenderApplication::on_device_destroyed(const Vulkan::DeviceCreatedEvent &)
@@ -529,7 +571,7 @@ void SWRenderApplication::render_frame(double frame_time, double)
 			break;
 		}
 
-		rasterizer_gpu.set_texture(*setup.view);
+		rasterizer_gpu.set_texture_descriptor(texture_descriptors[setup.index]);
 		rasterizer_gpu.rasterize_primitives(&setup.setup, 1);
 		if (queue_dump_frame)
 			dump_primitives(&setup.setup, 1);

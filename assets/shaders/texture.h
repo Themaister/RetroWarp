@@ -31,7 +31,7 @@ uvec4 sample_texture(uint variant_index, vec2 f_uv, float f_lod)
 	ivec2 wrap_uv = uv & 31;
 	uv >>= 5;
 
-	int offset = render_states[variant_index].texture_offset[lod];
+	int offset = render_states[variant_index].texture_offset[lod] >> 1;
 
 	ivec2 uv0 = clamp(uv, tex_clamp.xy, tex_clamp.zw) & tex_mask;
 	ivec2 uv1 = clamp(uv + ivec2(1, 0), tex_clamp.xy, tex_clamp.zw) & tex_mask;
