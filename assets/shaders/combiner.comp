@@ -68,6 +68,13 @@ layout(std430, set = 0, binding = 3) writeonly buffer Flags
     FlagTile flag_tiles[];
 };
 
+layout(std430, set = 0, binding = 8) readonly buffer VRAM
+{
+    uint16_t vram_data[];
+};
+
+#include "texture.h"
+
 #if !SUBGROUP && !defined(DERIVATIVE_GROUP_LINEAR) && !defined(DERIVATIVE_GROUP_QUAD)
 shared float shared_u[gl_WorkGroupSize.x];
 shared float shared_v[gl_WorkGroupSize.x];
@@ -154,7 +161,7 @@ void main()
 
         f_width = max(f_width, 1.0);
         float f_lod = log2(f_width);
-        tex = sample_texture(render_variant, f_uv, f_lod);
+        tex = sample_texture(variant, f_uv, f_lod);
     }
 
     uint alpha = uint(round(255.0 * clamp(tex.a, 0.0, 1.0)));

@@ -548,6 +548,7 @@ void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 	cmd.set_storage_buffer(0, 5, *staging.attributes_gpu);
 	cmd.set_uniform_buffer(0, 6, *staging.render_state_index_gpu);
 	cmd.set_uniform_buffer(0, 7, *staging.render_state_gpu);
+	cmd.set_uniform_buffer(0, 8, *vram_buffer);
 
 	auto &features = device->get_device_features();
 	uint32_t subgroup_size = features.subgroup_properties.subgroupSize;
@@ -1235,7 +1236,7 @@ void RasterizerGPU::Impl::queue_primitive(const PrimitiveSetup &setup)
 
 	staging.mapped_positions[staging.count] = setup.pos;
 	staging.mapped_attributes[staging.count] = setup.attr;
-	staging.mapped_state_index[staging.count] = current_state;
+	//staging.mapped_state_index[staging.count] = current_state;
 	staging.mapped_render_state_index[staging.count] = current_render_state;
 
 	staging.count++;
