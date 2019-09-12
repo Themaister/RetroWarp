@@ -43,7 +43,7 @@ public:
 
 private:
 	const uint8_t *blob;
-	size_t offset;
+	size_t offset = 0;
 	size_t size;
 };
 
@@ -191,10 +191,10 @@ int main(int argc, char **argv)
 	Global::init();
 	Global::filesystem()->register_protocol("assets", std::make_unique<OSFilesystem>(ASSET_DIRECTORY));
 
-	auto dump_file = Global::filesystem()->open(argv[1], FileMode::ReadOnly);
+	auto dump_file = Global::filesystem()->open(path, FileMode::ReadOnly);
 	if (!dump_file)
 	{
-		LOGE("Failed to open %s\n", argv[1]);
+		LOGE("Failed to open %s\n", path.c_str());
 		return EXIT_FAILURE;
 	}
 
