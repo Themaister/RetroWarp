@@ -474,6 +474,7 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd, bool ubershader)
 
 	const VkSubgroupFeatureFlags required = VK_SUBGROUP_FEATURE_BALLOT_BIT |
 	                                        VK_SUBGROUP_FEATURE_BASIC_BIT |
+	                                        VK_SUBGROUP_FEATURE_VOTE_BIT |
 	                                        VK_SUBGROUP_FEATURE_ARITHMETIC_BIT;
 
 	if (subgroup && (features.subgroup_properties.supportedOperations & required) == required &&

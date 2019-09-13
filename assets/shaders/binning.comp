@@ -5,6 +5,7 @@
 
 #if SUBGROUP
 #extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_vote : require
 #extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
 layout(local_size_x_id = 0) in;
@@ -138,15 +139,22 @@ void main()
     uvec4 ballot_result = subgroupBallot(group_bin_to_tile);
 #if !UBERSHADER
     uint bit_count = uint(bitCount(binned));
-    uint total_bit_count = subgroupAdd(bit_count);
     uint instance_offset = 0u;
+    if (subgroupAny(bit_count != 0u))
+    {
+        uint total_bit_count = subgroupAdd(bit_count);
+
+        if (subgroupElect())
+            if (total_bit_count != 0u)
+                instance_offset = atomicAdd(item_counts_per_variant[0].w, total_bit_count);
+
+        instance_offset = subgroupBroadcastFirst(instance_offset);
+        instance_offset += subgroupInclusiveAdd(bit_count) - bit_count;
+    }
+
 #endif
     if (subgroupElect())
     {
-#if !UBERSHADER
-        if (total_bit_count != 0u)
-            instance_offset = atomicAdd(item_counts_per_variant[0].w, total_bit_count);
-#endif
         uint binned_bitmask_offset = uint(TILE_BINNING_STRIDE_COARSE * linear_tile);
         if (gl_SubgroupSize == 64u)
         {
@@ -158,11 +166,6 @@ void main()
             binned_bitmask_coarse[binned_bitmask_offset + gl_SubgroupID + (gl_WorkGroupSize.x / 32u) * gl_WorkGroupID.x] = ballot_result.x;
         }
     }
-
-#if !UBERSHADER
-    instance_offset = subgroupBroadcastFirst(instance_offset);
-    instance_offset += subgroupInclusiveAdd(bit_count) - bit_count;
-#endif
 #else
     if (local_index == 0u)
         merged_mask = 0u;
