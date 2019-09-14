@@ -15,10 +15,10 @@ uvec4 filter_vert(uvec4 a, uvec4 b, int l)
 	return (ret + 512u) >> 10u;
 }
 
-uvec4 filter_bilinear(uint sample0, uint sample1, uint sample2, uint sample3, ivec2 l)
+uvec4 filter_bilinear(uvec4 sample0, uvec4 sample1, uvec4 sample2, uvec4 sample3, ivec2 l)
 {
-	uvec4 tex_top = filter_horiz(expand_argb1555(unpack_argb1555(sample0)), expand_argb1555(unpack_argb1555(sample1)), l.x);
-	uvec4 tex_bottom = filter_horiz(expand_argb1555(unpack_argb1555(sample2)), expand_argb1555(unpack_argb1555(sample3)), l.x);
+	uvec4 tex_top = filter_horiz(sample0, sample1, l.x);
+	uvec4 tex_bottom = filter_horiz(sample2, sample3, l.x);
 	uvec4 tex = filter_vert(tex_top, tex_bottom, l.y);
 	return tex;
 }
@@ -27,6 +27,15 @@ uvec4 filter_trilinear(uvec4 a, uvec4 b, int l)
 {
 	uvec4 res = a * uint(256 - l) + b * uint(l);
 	return (res + 0x80u) >> 8u;
+}
+
+const uint TEXTURE_FMT_ARGB1555 = 0;
+const uint TEXTURE_FMT_I8 = 1;
+const uint TEXTURE_FMT_LA88 = 4;
+
+int round_up_bits(int u, int subsample)
+{
+	return (u + ((1 << subsample) - 1)) >> subsample;
 }
 
 uvec4 sample_texture_lod(uint variant_index, ivec2 base_uv, int lod)
@@ -43,21 +52,51 @@ uvec4 sample_texture_lod(uint variant_index, ivec2 base_uv, int lod)
 	ivec2 wrap_uv = uv & 31;
 	uv >>= 5;
 
-	int offset = render_states[variant_index].texture_offset[lod] >> 1;
+	uint fmt = uint(render_states[variant_index].texture_fmt);
+	int subsample = int(fmt & 3u);
+	mip_width = round_up_bits(mip_width, subsample);
 
 	ivec2 uv0 = clamp(uv, tex_clamp.xy, tex_clamp.zw) & tex_mask;
 	ivec2 uv1 = clamp(uv + ivec2(1, 0), tex_clamp.xy, tex_clamp.zw) & tex_mask;
 	ivec2 uv2 = clamp(uv + ivec2(0, 1), tex_clamp.xy, tex_clamp.zw) & tex_mask;
 	ivec2 uv3 = clamp(uv + ivec2(1), tex_clamp.xy, tex_clamp.zw) & tex_mask;
 
-	int offset0 = (offset + uv0.x + uv0.y * mip_width) & ((VRAM_SIZE >> 1) - 1);
-	int offset1 = (offset + uv1.x + uv1.y * mip_width) & ((VRAM_SIZE >> 1) - 1);
-	int offset2 = (offset + uv2.x + uv2.y * mip_width) & ((VRAM_SIZE >> 1) - 1);
-	int offset3 = (offset + uv3.x + uv3.y * mip_width) & ((VRAM_SIZE >> 1) - 1);
-	uint sample0 = uint(vram_data[offset0]);
-	uint sample1 = uint(vram_data[offset1]);
-	uint sample2 = uint(vram_data[offset2]);
-	uint sample3 = uint(vram_data[offset3]);
+	int offset = render_states[variant_index].texture_offset[lod] >> 1;
+
+	int offset0 = (offset + round_up_bits(uv0.x, subsample) + uv0.y * mip_width) & ((VRAM_SIZE >> 1) - 1);
+	int offset1 = (offset + round_up_bits(uv1.x, subsample) + uv1.y * mip_width) & ((VRAM_SIZE >> 1) - 1);
+	int offset2 = (offset + round_up_bits(uv2.x, subsample) + uv2.y * mip_width) & ((VRAM_SIZE >> 1) - 1);
+	int offset3 = (offset + round_up_bits(uv3.x, subsample) + uv3.y * mip_width) & ((VRAM_SIZE >> 1) - 1);
+	uint raw_sample0 = uint(vram_data[offset0]);
+	uint raw_sample1 = uint(vram_data[offset1]);
+	uint raw_sample2 = uint(vram_data[offset2]);
+	uint raw_sample3 = uint(vram_data[offset3]);
+
+	uvec4 sample0, sample1, sample2, sample3;
+
+	switch (fmt)
+	{
+	case TEXTURE_FMT_ARGB1555:
+		sample0 = expand_argb1555(unpack_argb1555(raw_sample0));
+		sample1 = expand_argb1555(unpack_argb1555(raw_sample1));
+		sample2 = expand_argb1555(unpack_argb1555(raw_sample2));
+		sample3 = expand_argb1555(unpack_argb1555(raw_sample3));
+		break;
+
+	case TEXTURE_FMT_LA88:
+		sample0 = uvec4(uvec3(raw_sample0 >> 8u), raw_sample0 & 0xffu);
+		sample1 = uvec4(uvec3(raw_sample1 >> 8u), raw_sample1 & 0xffu);
+		sample2 = uvec4(uvec3(raw_sample2 >> 8u), raw_sample2 & 0xffu);
+		sample3 = uvec4(uvec3(raw_sample3 >> 8u), raw_sample3 & 0xffu);
+		break;
+
+	case TEXTURE_FMT_I8:
+		sample0 = uvec4(raw_sample0 >> (8 * (uv0.x & 1u)));
+		sample1 = uvec4(raw_sample1 >> (8 * (uv1.x & 1u)));
+		sample2 = uvec4(raw_sample2 >> (8 * (uv2.x & 1u)));
+		sample3 = uvec4(raw_sample3 >> (8 * (uv3.x & 1u)));
+		break;
+	}
 
 	uvec4 tex = filter_bilinear(sample0, sample1, sample2, sample3, wrap_uv);
 	return tex;

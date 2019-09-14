@@ -22,7 +22,8 @@ struct RenderState
 	i16vec4 texture_clamp;
 	i16vec2 texture_mask;
 	int16_t texture_width;
-	int16_t texture_max_lod;
+	int8_t texture_max_lod;
+	uint8_t texture_fmt;
 
 	// 32 bytes.
 	int texture_offset[8];

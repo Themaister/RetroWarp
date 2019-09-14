@@ -47,13 +47,21 @@ enum CombinerState
 };
 using CombinerFlags = uint8_t;
 
+enum class TextureFormat : uint8_t
+{
+	ARGB1555 = 0,
+	I8 = 1,
+	LA88 = 4
+};
+
 struct TextureDescriptor
 {
 	// 16 bytes.
 	muglm::i16vec4 texture_clamp = muglm::i16vec4(-0x8000, -0x8000, 0x7fff, 0x7fff);
 	muglm::i16vec2 texture_mask = muglm::i16vec2(255, 255);
 	int16_t texture_width = 256;
-	int16_t texture_max_lod = 7;
+	int8_t texture_max_lod = 7;
+	TextureFormat texture_fmt = TextureFormat::ARGB1555;
 
 	// 32 bytes.
 	uint32_t texture_offset[8] = {};
