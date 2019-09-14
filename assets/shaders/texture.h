@@ -38,6 +38,11 @@ int round_up_bits(int u, int subsample)
 	return (u + ((1 << subsample) - 1)) >> subsample;
 }
 
+int round_down_bits(int u, int subsample)
+{
+	return u >> subsample;
+}
+
 uvec4 sample_texture_lod(uint variant_index, ivec2 base_uv, int lod)
 {
 	int tex_width = int(render_states[variant_index].texture_width);
@@ -63,10 +68,10 @@ uvec4 sample_texture_lod(uint variant_index, ivec2 base_uv, int lod)
 
 	int offset = render_states[variant_index].texture_offset[lod] >> 1;
 
-	int offset0 = (offset + round_up_bits(uv0.x, subsample) + uv0.y * mip_width) & ((VRAM_SIZE >> 1) - 1);
-	int offset1 = (offset + round_up_bits(uv1.x, subsample) + uv1.y * mip_width) & ((VRAM_SIZE >> 1) - 1);
-	int offset2 = (offset + round_up_bits(uv2.x, subsample) + uv2.y * mip_width) & ((VRAM_SIZE >> 1) - 1);
-	int offset3 = (offset + round_up_bits(uv3.x, subsample) + uv3.y * mip_width) & ((VRAM_SIZE >> 1) - 1);
+	int offset0 = (offset + round_down_bits(uv0.x, subsample) + uv0.y * mip_width) & ((VRAM_SIZE >> 1) - 1);
+	int offset1 = (offset + round_down_bits(uv1.x, subsample) + uv1.y * mip_width) & ((VRAM_SIZE >> 1) - 1);
+	int offset2 = (offset + round_down_bits(uv2.x, subsample) + uv2.y * mip_width) & ((VRAM_SIZE >> 1) - 1);
+	int offset3 = (offset + round_down_bits(uv3.x, subsample) + uv3.y * mip_width) & ((VRAM_SIZE >> 1) - 1);
 	uint raw_sample0 = uint(vram_data[offset0]);
 	uint raw_sample1 = uint(vram_data[offset1]);
 	uint raw_sample2 = uint(vram_data[offset2]);

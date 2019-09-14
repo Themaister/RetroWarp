@@ -34,7 +34,7 @@ void main()
         uint pixel_index = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * registers.width;
         uvec4 input_pixel = uvec4(input_colors[pixel_index]);
 #if FMT == 1
-        uint index = registers.offset + gl_GlobalInvocationID.x + gl_GlobalInvocation.y * ((registers.width + 1u) & ~1u);
+        uint index = registers.offset + gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * ((registers.width + 1u) & ~1u);
         index &= VRAM_SIZE - 1;
         vram[index] = uint8_t(input_pixel.g);
 #elif FMT == 0
