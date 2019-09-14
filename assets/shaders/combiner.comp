@@ -30,12 +30,12 @@ layout(local_size_x = TILE_SIZE_SQUARE) in;
 
 struct TileRasterWork
 {
-   uint16_t x, y, instance, prim;
+   uint x, y, instance, prim;
 };
 
 layout(std430, set = 0, binding = 0) readonly buffer WorkList
 {
-    TileRasterWork tile_raster_work[];
+    uvec4 tile_raster_work[];
 };
 
 struct ColorTile
@@ -84,10 +84,11 @@ void main()
 {
     uint work_instance = gl_WorkGroupID.x;
 
-    uint tile_x = uint(tile_raster_work[work_instance].x);
-    uint tile_y = uint(tile_raster_work[work_instance].y);
-    uint tile_instance_index = uint(tile_raster_work[work_instance].instance);
-    uint primitive_index = uint(tile_raster_work[work_instance].prim);
+    uvec4 raster_work = tile_raster_work[work_instance];
+    uint tile_x = raster_work.x;
+    uint tile_y = raster_work.y;
+    uint tile_instance_index = raster_work.z;
+    uint primitive_index = raster_work.w;
 
 #if defined(DERIVATIVE_GROUP_QUAD)
     uint local_index = gl_LocalInvocationIndex;

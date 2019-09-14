@@ -192,9 +192,9 @@ const int RASTER_ROUNDING = (1 << (SUBPIXELS_LOG2 + 16)) - 1;
 
 struct TileRasterWork
 {
-	uint16_t tile_x, tile_y;
-	uint16_t tile_instance;
-	uint16_t primitive;
+	uint32_t tile_x, tile_y;
+	uint32_t tile_instance;
+	uint32_t primitive;
 };
 
 void RasterizerGPU::Impl::reset_staging()
@@ -557,7 +557,7 @@ void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 	                                        VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
 	                                        VK_SUBGROUP_FEATURE_BALLOT_BIT;
 
-	if (subgroup && features.compute_shader_derivative_features.computeDerivativeGroupQuads)
+	if (false && subgroup && features.compute_shader_derivative_features.computeDerivativeGroupQuads)
 	{
 		cmd.set_program("assets://shaders/combiner.comp", {
 			{"DERIVATIVE_GROUP_QUAD", 1},
@@ -566,7 +566,7 @@ void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 			{"TILE_SIZE_SQUARE", tile_size * tile_size},
 		});
 	}
-	else if (subgroup && features.compute_shader_derivative_features.computeDerivativeGroupLinear)
+	else if (false && subgroup && features.compute_shader_derivative_features.computeDerivativeGroupLinear)
 	{
 		cmd.set_program("assets://shaders/combiner.comp", {
 				{"DERIVATIVE_GROUP_LINEAR", 1},

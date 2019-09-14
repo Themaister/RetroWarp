@@ -48,14 +48,14 @@ layout(std430, set = 0, binding = 7) buffer IndirectBuffer
 
 struct TileRasterWork
 {
-    uint16_t tile_x, tile_y;
-    uint16_t tile_instance;
-    uint16_t primitive;
+    uint tile_x, tile_y;
+    uint tile_instance;
+    uint primitive;
 };
 
 layout(std430, set = 0, binding = 8) writeonly buffer WorkList
 {
-    u16vec4 tile_raster_work[];
+    uvec4 tile_raster_work[];
 };
 
 layout(std430, set = 0, binding = 9) readonly buffer StateIndex
@@ -71,7 +71,7 @@ shared uint merged_mask;
 #if !UBERSHADER
 uint allocate_work_offset(uint variant_index)
 {
-#if !SUBGROUP
+#if !SUBGROUP || 0
     return atomicAdd(item_counts_per_variant[variant_index].x, 1u);
 #else
     // Merge atomic operations.
@@ -203,7 +203,7 @@ void main()
 
         uint work_offset = allocate_work_offset(variant_index);
         tile_raster_work[work_offset + uint(TILE_INSTANCE_STRIDE) * variant_index] =
-            u16vec4(uvec4(tile.x, tile.y, instance_offset, primitive_index));
+            uvec4(uvec4(tile.x, tile.y, instance_offset, primitive_index));
         instance_offset++;
     }
 #endif
