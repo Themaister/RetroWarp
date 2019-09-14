@@ -557,7 +557,7 @@ void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 	                                        VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
 	                                        VK_SUBGROUP_FEATURE_BALLOT_BIT;
 
-	if (false && subgroup && features.compute_shader_derivative_features.computeDerivativeGroupQuads)
+	if (subgroup && features.compute_shader_derivative_features.computeDerivativeGroupQuads)
 	{
 		cmd.set_program("assets://shaders/combiner.comp", {
 			{"DERIVATIVE_GROUP_QUAD", 1},
@@ -566,13 +566,13 @@ void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 			{"TILE_SIZE_SQUARE", tile_size * tile_size},
 		});
 	}
-	else if (false && subgroup && features.compute_shader_derivative_features.computeDerivativeGroupLinear)
+	else if (subgroup && features.compute_shader_derivative_features.computeDerivativeGroupLinear)
 	{
 		cmd.set_program("assets://shaders/combiner.comp", {
 				{"DERIVATIVE_GROUP_LINEAR", 1},
 				{"SUBGROUP", 0},
 				{"TILE_SIZE", tile_size},
-				{"TILE_SIZE_SQUARE", tile_size},
+				{"TILE_SIZE_SQUARE", tile_size * tile_size},
 		});
 	}
 	else if (subgroup && (features.subgroup_properties.supportedOperations & required) == required &&
