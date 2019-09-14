@@ -61,9 +61,9 @@ struct RasterizerGPU::Impl
 
 	struct
 	{
-		BufferHandle color[2];
-		BufferHandle depth[2];
-		BufferHandle flags[2];
+		BufferHandle color;
+		BufferHandle depth;
+		BufferHandle flags;
 		unsigned index = 0;
 		Semaphore rop_complete[2];
 	} tile_instance_data;
@@ -107,8 +107,8 @@ struct RasterizerGPU::Impl
 
 	struct
 	{
-		BufferHandle item_count_per_variant;
-		BufferHandle work_list_per_variant;
+		BufferHandle item_count_per_variant[2];
+		BufferHandle work_list_per_variant[2];
 	} raster_work;
 
 	struct
@@ -395,7 +395,7 @@ void RasterizerGPU::Impl::clear_indirect_buffer(CommandBuffer &cmd)
 	cmd.set_program("assets://shaders/clear_indirect_buffers.comp");
 	cmd.set_specialization_constant_mask(1);
 	cmd.set_specialization_constant(0, MAX_NUM_SHADER_STATE_INDICES);
-	cmd.set_storage_buffer(0, 0, *raster_work.item_count_per_variant);
+	cmd.set_storage_buffer(0, 0, *raster_work.item_count_per_variant[tile_instance_data.index]);
 	cmd.dispatch(1, 1, 1);
 	cmd.end_region();
 	cmd.set_specialization_constant_mask(0);
@@ -462,8 +462,8 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd, bool ubershader)
 	if (!ubershader)
 	{
 		cmd.set_storage_buffer(0, 6, *tile_count.tile_offset[tile_instance_data.index]);
-		cmd.set_storage_buffer(0, 7, *raster_work.item_count_per_variant);
-		cmd.set_storage_buffer(0, 8, *raster_work.work_list_per_variant);
+		cmd.set_storage_buffer(0, 7, *raster_work.item_count_per_variant[tile_instance_data.index]);
+		cmd.set_storage_buffer(0, 8, *raster_work.work_list_per_variant[tile_instance_data.index]);
 		cmd.set_storage_buffer(0, 9, *staging.state_index_gpu);
 	}
 
@@ -542,9 +542,9 @@ bool RasterizerGPU::Impl::supports_subgroup_size_control(uint32_t minimum_size, 
 void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 {
 	cmd.begin_region("dispatch-combiner-work");
-	cmd.set_storage_buffer(0, 1, *tile_instance_data.color[tile_instance_data.index]);
-	cmd.set_storage_buffer(0, 2, *tile_instance_data.depth[tile_instance_data.index]);
-	cmd.set_storage_buffer(0, 3, *tile_instance_data.flags[tile_instance_data.index]);
+	cmd.set_storage_buffer(0, 1, *tile_instance_data.color);
+	cmd.set_storage_buffer(0, 2, *tile_instance_data.depth);
+	cmd.set_storage_buffer(0, 3, *tile_instance_data.flags);
 	cmd.set_storage_buffer(0, 4, *staging.positions_gpu);
 	cmd.set_storage_buffer(0, 5, *staging.attributes_gpu);
 	cmd.set_uniform_buffer(0, 6, *staging.render_state_index_gpu);
@@ -602,10 +602,10 @@ void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 
 	// HACK: We just have one shader variant for now ...
 	unsigned variant = 0;
-	cmd.set_storage_buffer(0, 0, *raster_work.work_list_per_variant,
+	cmd.set_storage_buffer(0, 0, *raster_work.work_list_per_variant[tile_instance_data.index],
 			variant * (MAX_NUM_TILE_INSTANCES + 1) * sizeof(TileRasterWork),
 			(MAX_NUM_TILE_INSTANCES + 1) * sizeof(TileRasterWork));
-	cmd.dispatch_indirect(*raster_work.item_count_per_variant, 16 * variant);
+	cmd.dispatch_indirect(*raster_work.item_count_per_variant[tile_instance_data.index], 16 * variant);
 
 	cmd.end_region();
 	cmd.enable_subgroup_size_control(false);
@@ -727,9 +727,9 @@ void RasterizerGPU::Impl::run_rop(CommandBuffer &cmd)
 	cmd.set_storage_buffer(0, 0, *vram_buffer);
 	cmd.set_storage_buffer(0, 1, *binning.mask_buffer[tile_instance_data.index]);
 	cmd.set_storage_buffer(0, 2, *binning.mask_buffer_coarse[tile_instance_data.index]);
-	cmd.set_storage_buffer(0, 3, *tile_instance_data.color[tile_instance_data.index]);
-	cmd.set_storage_buffer(0, 4, *tile_instance_data.depth[tile_instance_data.index]);
-	cmd.set_storage_buffer(0, 5, *tile_instance_data.flags[tile_instance_data.index]);
+	cmd.set_storage_buffer(0, 3, *tile_instance_data.color);
+	cmd.set_storage_buffer(0, 4, *tile_instance_data.depth);
+	cmd.set_storage_buffer(0, 5, *tile_instance_data.flags);
 	cmd.set_storage_buffer(0, 6, *tile_count.tile_offset[tile_instance_data.index]);
 	cmd.set_uniform_buffer(0, 7, *staging.render_state_index_gpu);
 	cmd.set_uniform_buffer(0, 8, *staging.render_state_gpu);
@@ -812,6 +812,16 @@ void RasterizerGPU::Impl::flush_split()
 
 	auto queue_type = async_compute ? CommandBuffer::Type::AsyncCompute : CommandBuffer::Type::Generic;
 
+	// Need to wait until an earlier pass of ROP completes.
+	auto &rop_sem = tile_instance_data.rop_complete[tile_instance_data.index];
+	if (rop_sem)
+	{
+		device->add_wait_semaphore(queue_type,
+		                           rop_sem,
+		                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, true);
+		rop_sem.reset();
+	}
+
 	auto cmd = device->request_command_buffer(queue_type);
 
 	set_fb_info(*cmd);
@@ -830,37 +840,12 @@ void RasterizerGPU::Impl::flush_split()
 
 	auto t1 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 	device->register_time_interval(t0, t1, "binning-low-res-prepass");
-	device->submit(cmd);
-
-	// Need to wait until an earlier pass of ROP completes.
-	auto &rop_sem = tile_instance_data.rop_complete[tile_instance_data.index];
-	if (rop_sem)
-	{
-		device->add_wait_semaphore(queue_type,
-			rop_sem,
-			VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, true);
-		rop_sem.reset();
-	}
-
-	cmd = device->request_command_buffer(queue_type);
-	set_fb_info(*cmd);
-
-	t1 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 
 	// Binning at full-resolution.
 	binning_full_res(*cmd, false);
 
-	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
-	             VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT);
-
 	auto t2 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 	device->register_time_interval(t1, t2, "binning-full-res");
-
-	dispatch_combiner_work(*cmd);
-
-	auto t3 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-	device->register_time_interval(t2, t3, "dispatch-combiner-work");
 
 	// Hand off shaded result to ROP.
 	Semaphore sem;
@@ -869,7 +854,17 @@ void RasterizerGPU::Impl::flush_split()
 	cmd = device->request_command_buffer();
 	set_fb_info(*cmd);
 
-	t3 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+	t2 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+
+	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+	             VK_ACCESS_SHADER_WRITE_BIT,
+	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+	             VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+
+	dispatch_combiner_work(*cmd);
+
+	auto t3 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+	device->register_time_interval(t2, t3, "dispatch-combiner-work");
 
 	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
 	             VK_ACCESS_SHADER_WRITE_BIT,
@@ -881,7 +876,6 @@ void RasterizerGPU::Impl::flush_split()
 
 	auto t4 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 	device->register_time_interval(t3, t4, "rop");
-
 	device->register_time_interval(t0, t4, "iteration");
 
 	sem.reset();
@@ -935,14 +929,11 @@ void RasterizerGPU::Impl::init_tile_buffers()
 	             VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 
 	info.size = MAX_NUM_TILE_INSTANCES * tile_size * tile_size * sizeof(uint32_t);
-	for (auto &color : tile_instance_data.color)
-		color = device->create_buffer(info);
+	tile_instance_data.color = device->create_buffer(info);
 	info.size = MAX_NUM_TILE_INSTANCES * tile_size * tile_size * sizeof(uint16_t);
-	for (auto &depth : tile_instance_data.depth)
-		depth = device->create_buffer(info);
+	tile_instance_data.depth = device->create_buffer(info);
 	info.size = MAX_NUM_TILE_INSTANCES * tile_size * tile_size * sizeof(uint8_t);
-	for (auto &flags : tile_instance_data.flags)
-		flags = device->create_buffer(info);
+	tile_instance_data.flags = device->create_buffer(info);
 }
 
 void RasterizerGPU::Impl::init_raster_work_buffers()
@@ -955,11 +946,13 @@ void RasterizerGPU::Impl::init_raster_work_buffers()
 
 	// Round MAX_NUM_TILE_INSTANCES up to 0x10000.
 	info.size = (MAX_NUM_TILE_INSTANCES + 1) * sizeof(TileRasterWork) * MAX_NUM_SHADER_STATE_INDICES;
-	raster_work.work_list_per_variant = device->create_buffer(info);
+	for (auto &work_list : raster_work.work_list_per_variant)
+		work_list = device->create_buffer(info);
 
 	info.size = MAX_NUM_SHADER_STATE_INDICES * (4 * sizeof(uint32_t));
 	info.usage |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
-	raster_work.item_count_per_variant = device->create_buffer(info);
+	for (auto &item_count : raster_work.item_count_per_variant)
+		item_count = device->create_buffer(info);
 }
 
 template <typename T>
