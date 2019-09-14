@@ -295,6 +295,7 @@ void SWRenderApplication::on_device_created(const Vulkan::DeviceCreatedEvent& e)
 		unsigned levels = std::min(layout.get_levels() - TEXTURE_BASE_LEVEL, 8u);
 
 		TextureDescriptor descriptor;
+		descriptor.texture_fmt = TextureFormat::LA88;
 		descriptor.texture_clamp = i16vec4(-0x8000, -0x8000, 0x7fff, 0x7fff);
 		descriptor.texture_mask = i16vec2(layout.get_width(TEXTURE_BASE_LEVEL) - 1,
 		                                  layout.get_height(TEXTURE_BASE_LEVEL) - 1);
@@ -303,12 +304,14 @@ void SWRenderApplication::on_device_created(const Vulkan::DeviceCreatedEvent& e)
 
 		for (unsigned level = 0; level < levels; level++)
 		{
+			addr = (addr + 3) & ~3;
 			unsigned mip_width = layout.get_width(level + TEXTURE_BASE_LEVEL);
 			unsigned mip_height = layout.get_height(level + TEXTURE_BASE_LEVEL);
 			descriptor.texture_offset[level] = addr;
-			rasterizer_gpu.copy_texture_rgba8888_to_argb1555(addr,
-			                                                 static_cast<const uint32_t *>(layout.data(0, level + TEXTURE_BASE_LEVEL)),
-			                                                 mip_width * mip_height);
+			rasterizer_gpu.copy_texture_rgba8888_to_vram(addr,
+			                                             static_cast<const uint32_t *>(layout.data(0, level + TEXTURE_BASE_LEVEL)),
+			                                             mip_width, mip_height, descriptor.texture_fmt);
+			//addr += ((mip_width + 1) & ~1) * mip_height;
 			addr += mip_width * mip_height * 2;
 		}
 

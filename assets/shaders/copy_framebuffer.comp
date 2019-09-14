@@ -1,7 +1,7 @@
 #version 450
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_8bit_storage : require
-layout(local_size_x = 64) in;
+layout(local_size_x = 8, local_size_y = 8) in;
 
 #include "constants.h"
 #include "pixel_conv.h"
@@ -9,12 +9,17 @@ layout(local_size_x = 64) in;
 layout(push_constant, std430) uniform Registers
 {
     uint offset;
-    uint count;
+    uint width;
+    uint height;
 } registers;
 
 layout(set = 0, binding = 0, std430) writeonly buffer VRAM
 {
+#if FMT == 1
+    uint8_t vram[];
+#else
     uint16_t vram[];
+#endif
 };
 
 layout(set = 0, binding = 1, std430) readonly buffer Texture
@@ -24,10 +29,26 @@ layout(set = 0, binding = 1, std430) readonly buffer Texture
 
 void main()
 {
-    if (gl_GlobalInvocationID.x < registers.count)
+    if (all(lessThan(gl_GlobalInvocationID.xy, uvec2(registers.width, registers.height))))
     {
-        uint index = registers.offset + gl_GlobalInvocationID.x;
+        uint pixel_index = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * registers.width;
+        uvec4 input_pixel = uvec4(input_colors[pixel_index]);
+#if FMT == 1
+        uint index = registers.offset + gl_GlobalInvocationID.x + gl_GlobalInvocation.y * ((registers.width + 1u) & ~1u);
+        index &= VRAM_SIZE - 1;
+        vram[index] = uint8_t(input_pixel.g);
+#elif FMT == 0
+        uint index = registers.offset + pixel_index;
         index &= (VRAM_SIZE >> 1) - 1;
-        vram[index] = uint16_t(pack_argb1555(quantize_argb1555(uvec4(input_colors[gl_GlobalInvocationID.x]))));
+        vram[index] = uint16_t(pack_argb1555(quantize_argb1555(input_pixel)));
+#elif FMT == 4
+        uint index = registers.offset + pixel_index;
+        index &= (VRAM_SIZE >> 1) - 1;
+        vram[index] = uint16_t(input_pixel.r | (input_pixel.a << 8u));
+#else
+        uint index = registers.offset + pixel_index;
+        index &= (VRAM_SIZE >> 1) - 1;
+        vram[index] = uint16_t(0xffffu);
+#endif
     }
 }

@@ -278,9 +278,9 @@ int main(int argc, char **argv)
 			unsigned mip_width = layout.get_width(level + TEXTURE_BASE_LEVEL);
 			unsigned mip_height = layout.get_height(level + TEXTURE_BASE_LEVEL);
 			descriptor.texture_offset[level] = addr;
-			rasterizer.copy_texture_rgba8888_to_argb1555(addr,
-			                                             static_cast<const uint32_t *>(layout.data(0, level + TEXTURE_BASE_LEVEL)),
-			                                             mip_width * mip_height);
+			rasterizer.copy_texture_rgba8888_to_vram(addr,
+			                                         static_cast<const uint32_t *>(layout.data(0, level + TEXTURE_BASE_LEVEL)),
+			                                         mip_width, mip_height, TextureFormat::ARGB1555);
 			addr += mip_width * mip_height * 2;
 		}
 

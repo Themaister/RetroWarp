@@ -1092,14 +1092,14 @@ void RasterizerGPU::clear_depth(uint16_t z)
 	impl->device->submit(cmd);
 }
 
-void RasterizerGPU::copy_texture_rgba8888_to_argb1555(uint32_t offset, const uint32_t *src, size_t count)
+void RasterizerGPU::copy_texture_rgba8888_to_vram(uint32_t offset, const uint32_t *src, unsigned width, unsigned height, TextureFormat fmt)
 {
 	flush();
 
 	BufferCreateInfo info = {};
 	info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
 	info.domain = BufferDomain::Host;
-	info.size = count * sizeof(uint32_t);
+	info.size = width * height * sizeof(uint32_t);
 	auto buffer = impl->device->create_buffer(info, src);
 
 	auto cmd = impl->device->request_command_buffer();
@@ -1112,17 +1112,31 @@ void RasterizerGPU::copy_texture_rgba8888_to_argb1555(uint32_t offset, const uin
 	cmd->set_storage_buffer(0, 0, *impl->vram_buffer);
 	cmd->set_storage_buffer(0, 1, *buffer);
 	cmd->set_program("assets://shaders/copy_framebuffer.comp",
-	                 {{ "TILE_SIZE", impl->tile_size }});
+	                 {{ "TILE_SIZE", impl->tile_size }, { "FMT", int(fmt) }});
 
 	struct Registers
 	{
 		uint32_t offset;
-		uint32_t count;
+		uint32_t width;
+		uint32_t height;
 	} registers;
-	registers.offset = offset >> 1;
-	registers.count = count;
+
+	switch (fmt)
+	{
+	case TextureFormat::ARGB1555:
+	case TextureFormat::LA88:
+		registers.offset = offset >> 1;
+		break;
+
+	case TextureFormat::I8:
+		registers.offset = offset;
+		break;
+	}
+
+	registers.width = width;
+	registers.height = height;
 	cmd->push_constants(&registers, 0, sizeof(registers));
-	cmd->dispatch((count + 63) / 64, 1, 1);
+	cmd->dispatch((width + 7) / 8, (height + 7) / 8, 1);
 	impl->device->submit(cmd);
 }
 

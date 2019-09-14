@@ -92,7 +92,7 @@ public:
 	void rasterize_primitives(const PrimitiveSetup *setup, size_t count);
 
 	void set_texture_descriptor(const TextureDescriptor &desc);
-	void copy_texture_rgba8888_to_argb1555(uint32_t offset, const uint32_t *src, size_t count);
+	void copy_texture_rgba8888_to_vram(uint32_t offset, const uint32_t *src, unsigned width, unsigned height, TextureFormat fmt);
 
 	Vulkan::ImageHandle copy_to_framebuffer();
 

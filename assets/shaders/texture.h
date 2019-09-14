@@ -84,17 +84,17 @@ uvec4 sample_texture_lod(uint variant_index, ivec2 base_uv, int lod)
 		break;
 
 	case TEXTURE_FMT_LA88:
-		sample0 = uvec4(uvec3(raw_sample0 >> 8u), raw_sample0 & 0xffu);
-		sample1 = uvec4(uvec3(raw_sample1 >> 8u), raw_sample1 & 0xffu);
-		sample2 = uvec4(uvec3(raw_sample2 >> 8u), raw_sample2 & 0xffu);
-		sample3 = uvec4(uvec3(raw_sample3 >> 8u), raw_sample3 & 0xffu);
+		sample0 = uvec4(uvec3(raw_sample0 & 0xffu), raw_sample0 >> 8u);
+		sample1 = uvec4(uvec3(raw_sample1 & 0xffu), raw_sample1 >> 8u);
+		sample2 = uvec4(uvec3(raw_sample2 & 0xffu), raw_sample2 >> 8u);
+		sample3 = uvec4(uvec3(raw_sample3 & 0xffu), raw_sample3 >> 8u);
 		break;
 
 	case TEXTURE_FMT_I8:
-		sample0 = uvec4(raw_sample0 >> (8 * (uv0.x & 1u)));
-		sample1 = uvec4(raw_sample1 >> (8 * (uv1.x & 1u)));
-		sample2 = uvec4(raw_sample2 >> (8 * (uv2.x & 1u)));
-		sample3 = uvec4(raw_sample3 >> (8 * (uv3.x & 1u)));
+		sample0 = uvec4((raw_sample0 >> (8u * (uv0.x & 1u))) & 0xffu);
+		sample1 = uvec4((raw_sample1 >> (8u * (uv1.x & 1u))) & 0xffu);
+		sample2 = uvec4((raw_sample2 >> (8u * (uv2.x & 1u))) & 0xffu);
+		sample3 = uvec4((raw_sample3 >> (8u * (uv3.x & 1u))) & 0xffu);
 		break;
 	}
 
