@@ -268,20 +268,25 @@ int main(int argc, char **argv)
 		TextureDescriptor descriptor;
 
 		descriptor.texture_clamp = i16vec4(-0x8000, -0x8000, 0x7fff, 0x7fff);
-		descriptor.texture_mask = i16vec2(layout.get_width(TEXTURE_BASE_LEVEL) - 1,
+		descriptor.texture_mask = u16vec2(layout.get_width(TEXTURE_BASE_LEVEL) - 1,
 		                                  layout.get_height(TEXTURE_BASE_LEVEL) - 1);
 		descriptor.texture_max_lod = levels - 1;
 		descriptor.texture_width = layout.get_width(TEXTURE_BASE_LEVEL);
+		descriptor.texture_fmt = TEXTURE_FMT_ARGB1555 | TEXTURE_FMT_FILTER_MIP_LINEAR_BIT | TEXTURE_FMT_FILTER_LINEAR_BIT;
+
+		addr = (addr + 63) & ~63;
 
 		for (unsigned level = 0; level < levels; level++)
 		{
 			unsigned mip_width = layout.get_width(level + TEXTURE_BASE_LEVEL);
 			unsigned mip_height = layout.get_height(level + TEXTURE_BASE_LEVEL);
 			descriptor.texture_offset[level] = addr;
+			uint32_t blocks_width = (mip_width + 7) / 8;
+			uint32_t blocks_height = (mip_height + 7) / 8;
 			rasterizer.copy_texture_rgba8888_to_vram(addr,
 			                                         static_cast<const uint32_t *>(layout.data(0, level + TEXTURE_BASE_LEVEL)),
-			                                         mip_width, mip_height, TextureFormat::ARGB1555);
-			addr += mip_width * mip_height * 2;
+			                                         mip_width, mip_height, TEXTURE_FMT_ARGB1555);
+			addr += blocks_width * blocks_height * 64 * sizeof(uint16_t);
 		}
 
 		texture_descriptors.push_back(descriptor);

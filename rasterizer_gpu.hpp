@@ -47,21 +47,24 @@ enum CombinerState
 };
 using CombinerFlags = uint8_t;
 
-enum class TextureFormat : uint8_t
+enum TextureFormatBits
 {
-	ARGB1555 = 0,
-	I8 = 1,
-	LA88 = 4
+	TEXTURE_FMT_ARGB1555 = 0,
+	TEXTURE_FMT_I8 = 1,
+	TEXTURE_FMT_LA88 = 4,
+	TEXTURE_FMT_FILTER_MIP_LINEAR_BIT = 0x40,
+	TEXTURE_FMT_FILTER_LINEAR_BIT = 0x80
 };
+using TextureFormatFlags = uint8_t;
 
 struct TextureDescriptor
 {
 	// 16 bytes.
 	muglm::i16vec4 texture_clamp = muglm::i16vec4(-0x8000, -0x8000, 0x7fff, 0x7fff);
-	muglm::i16vec2 texture_mask = muglm::i16vec2(255, 255);
+	muglm::u16vec2 texture_mask = muglm::u16vec2(0xffff, 0xffff);
 	int16_t texture_width = 256;
 	int8_t texture_max_lod = 7;
-	TextureFormat texture_fmt = TextureFormat::ARGB1555;
+	TextureFormatFlags texture_fmt = TEXTURE_FMT_ARGB1555;
 
 	// 32 bytes.
 	uint32_t texture_offset[8] = {};
@@ -92,7 +95,7 @@ public:
 	void rasterize_primitives(const PrimitiveSetup *setup, size_t count);
 
 	void set_texture_descriptor(const TextureDescriptor &desc);
-	void copy_texture_rgba8888_to_vram(uint32_t offset, const uint32_t *src, unsigned width, unsigned height, TextureFormat fmt);
+	void copy_texture_rgba8888_to_vram(uint32_t offset, const uint32_t *src, unsigned width, unsigned height, TextureFormatBits fmt);
 
 	Vulkan::ImageHandle copy_to_framebuffer();
 

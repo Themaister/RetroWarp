@@ -1092,27 +1092,9 @@ void RasterizerGPU::clear_depth(uint16_t z)
 	impl->device->submit(cmd);
 }
 
-void RasterizerGPU::copy_texture_rgba8888_to_vram(uint32_t offset, const uint32_t *src, unsigned width, unsigned height, TextureFormat fmt)
+void RasterizerGPU::copy_texture_rgba8888_to_vram(uint32_t offset, const uint32_t *src, unsigned width, unsigned height, TextureFormatBits fmt)
 {
 	flush();
-
-	BufferCreateInfo info = {};
-	info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-	info.domain = BufferDomain::Host;
-	info.size = width * height * sizeof(uint32_t);
-	auto buffer = impl->device->create_buffer(info, src);
-
-	auto cmd = impl->device->request_command_buffer();
-
-	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-	             VK_ACCESS_SHADER_WRITE_BIT,
-	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-	             VK_ACCESS_SHADER_WRITE_BIT);
-
-	cmd->set_storage_buffer(0, 0, *impl->vram_buffer);
-	cmd->set_storage_buffer(0, 1, *buffer);
-	cmd->set_program("assets://shaders/copy_framebuffer.comp",
-	                 {{ "TILE_SIZE", impl->tile_size }, { "FMT", int(fmt) }});
 
 	struct Registers
 	{
@@ -1125,15 +1107,36 @@ void RasterizerGPU::copy_texture_rgba8888_to_vram(uint32_t offset, const uint32_
 
 	switch (fmt)
 	{
-	case TextureFormat::ARGB1555:
-	case TextureFormat::LA88:
+	case TEXTURE_FMT_ARGB1555:
+	case TEXTURE_FMT_LA88:
 		registers.blocks_width = (width + 7) / 8;
 		break;
 
-	case TextureFormat::I8:
+	case TEXTURE_FMT_I8:
 		registers.blocks_width = (width + 15) / 16;
 		break;
+
+	default:
+		return;
 	}
+
+	BufferCreateInfo info = {};
+	info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+	info.domain = BufferDomain::Host;
+	info.size = width * height * sizeof(uint32_t);
+
+	auto buffer = impl->device->create_buffer(info, src);
+	auto cmd = impl->device->request_command_buffer();
+
+	cmd->barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+	             VK_ACCESS_SHADER_WRITE_BIT,
+	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+	             VK_ACCESS_SHADER_WRITE_BIT);
+
+	cmd->set_storage_buffer(0, 0, *impl->vram_buffer);
+	cmd->set_storage_buffer(0, 1, *buffer);
+	cmd->set_program("assets://shaders/copy_framebuffer.comp",
+	                 {{ "TILE_SIZE", impl->tile_size }, { "FMT", int(fmt) }});
 
 	registers.offset = offset >> 1;
 	registers.blocks_height = (height + 7) / 8;
