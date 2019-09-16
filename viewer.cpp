@@ -27,6 +27,7 @@ using namespace Granite;
 
 constexpr int TEXTURE_BASE_LEVEL = 1;
 
+#if 0
 struct TextureSampler : Sampler
 {
 	Texel sample(int u, int v) override
@@ -98,6 +99,7 @@ void CanvasROP::fill_alpha_opaque()
 		for (unsigned x = 0; x < canvas.get_width(); x++)
 			canvas.get(x, y) |= 0xff000000u;
 }
+#endif
 
 struct SoftwareRenderableComponent : ComponentBase
 {
@@ -109,11 +111,56 @@ struct SoftwareRenderableComponent : ComponentBase
 	unsigned state_index;
 };
 
-static std::unordered_map<std::string, unsigned> state_index_map;
-static std::vector<const Vulkan::TextureFormatLayout *> state_index_layout;
-static std::vector<TextureDescriptor> texture_descriptors;
 
-static void create_software_renderable(Entity *entity, RenderableComponent *renderable)
+struct SWRenderApplication : Application, EventHandler
+{
+	explicit SWRenderApplication(const std::string &path, bool subgroup, bool ubershader, bool async_compute,
+	                             unsigned width, unsigned height, unsigned tile_size);
+	void render_frame(double, double) override;
+
+	SceneLoader loader;
+	//CanvasROP rop;
+	RasterizerCPU rasterizer;
+	FPSCamera cam;
+	RasterizerGPU rasterizer_gpu;
+
+	void on_device_created(const Vulkan::DeviceCreatedEvent &e);
+	void on_device_destroyed(const Vulkan::DeviceCreatedEvent &);
+	bool on_key_pressed(const KeyboardEvent &e);
+	bool queue_dump_frame = false;
+
+	FILE *dump_file = nullptr;
+	void begin_dump_frame();
+	void end_dump_frame();
+	void dump_textures(const std::vector<SceneFormats::MemoryMappedTexture *> &textures);
+	void dump_set_texture(unsigned index);
+	void dump_primitives(const PrimitiveSetup *setup, unsigned count);
+	void dump_alpha_threshold(uint8_t threshold);
+	void dump_rop_state(BlendState blend_state);
+
+	struct Cached
+	{
+		unsigned index;
+		const Vulkan::ImageView *view;
+		PrimitiveSetup setup;
+		DrawPipeline pipeline;
+	};
+	std::vector<Cached> setup_cache;
+	bool update_setup_cache = true;
+	bool subgroup;
+	bool ubershader;
+	bool async_compute;
+	unsigned fb_width;
+	unsigned fb_height;
+	unsigned tile_size;
+
+	std::unordered_map<std::string, unsigned> state_index_map;
+	std::vector<const Vulkan::TextureFormatLayout *> state_index_layout;
+	std::vector<TextureDescriptor> texture_descriptors;
+	void create_software_renderable(Entity *entity, RenderableComponent *renderable);
+};
+
+void SWRenderApplication::create_software_renderable(Entity *entity, RenderableComponent *renderable)
 {
 	auto *imported_mesh = dynamic_cast<ImportedMesh *>(renderable->renderable.get());
 	if (!imported_mesh)
@@ -231,49 +278,6 @@ static void create_software_renderable(Entity *entity, RenderableComponent *rend
 	sw->transformed_vertices = sw->vertices;
 }
 
-struct SWRenderApplication : Application, EventHandler
-{
-	explicit SWRenderApplication(const std::string &path, bool subgroup, bool ubershader, bool async_compute,
-	                             unsigned width, unsigned height, unsigned tile_size);
-	void render_frame(double, double) override;
-
-	SceneLoader loader;
-	CanvasROP rop;
-	RasterizerCPU rasterizer;
-	FPSCamera cam;
-	RasterizerGPU rasterizer_gpu;
-
-	void on_device_created(const Vulkan::DeviceCreatedEvent &e);
-	void on_device_destroyed(const Vulkan::DeviceCreatedEvent &);
-	bool on_key_pressed(const KeyboardEvent &e);
-	bool queue_dump_frame = false;
-
-	FILE *dump_file = nullptr;
-	void begin_dump_frame();
-	void end_dump_frame();
-	void dump_textures(const std::vector<SceneFormats::MemoryMappedTexture *> &textures);
-	void dump_set_texture(unsigned index);
-	void dump_primitives(const PrimitiveSetup *setup, unsigned count);
-	void dump_alpha_threshold(uint8_t threshold);
-	void dump_rop_state(BlendState blend_state);
-
-	struct Cached
-	{
-		unsigned index;
-		const Vulkan::ImageView *view;
-		PrimitiveSetup setup;
-		DrawPipeline pipeline;
-	};
-	std::vector<Cached> setup_cache;
-	bool update_setup_cache = true;
-	bool subgroup;
-	bool ubershader;
-	bool async_compute;
-	unsigned width;
-	unsigned height;
-	unsigned tile_size;
-};
-
 void SWRenderApplication::on_device_created(const Vulkan::DeviceCreatedEvent& e)
 {
 	rasterizer_gpu.init(e.get_device(), subgroup, ubershader, async_compute, tile_size);
@@ -282,10 +286,10 @@ void SWRenderApplication::on_device_created(const Vulkan::DeviceCreatedEvent& e)
 	rasterizer_gpu.set_combiner_mode(COMBINER_MODE_TEX_MOD_COLOR | COMBINER_SAMPLE_BIT);
 
 	uint32_t addr = 0;
-	rasterizer_gpu.set_color_framebuffer(addr, width, height, width * 2);
-	addr += width * height * 2;
-	rasterizer_gpu.set_depth_framebuffer(addr, width, height, width * 2);
-	addr += width * height * 2;
+	rasterizer_gpu.set_color_framebuffer(addr, fb_width, fb_height, fb_width * 2);
+	addr += fb_width * fb_height * 2;
+	rasterizer_gpu.set_depth_framebuffer(addr, fb_width, fb_height, fb_width * 2);
+	addr += fb_width * fb_height * 2;
 
 	unsigned num_textures = state_index_layout.size();
 	for (unsigned i = 0; i < num_textures; i++)
@@ -341,9 +345,9 @@ void SWRenderApplication::begin_dump_frame()
 
 	fwrite("RETROWARP DUMP01", 1, 16, dump_file);
 
-	uint32_t word = width;
+	uint32_t word = fb_width;
 	fwrite(&word, 1, sizeof(word), dump_file);
-	word = height;
+	word = fb_height;
 	fwrite(&word, 1, sizeof(word), dump_file);
 }
 
@@ -401,7 +405,7 @@ void SWRenderApplication::end_dump_frame()
 SWRenderApplication::SWRenderApplication(const std::string &path, bool subgroup_, bool ubershader_, bool async_compute_,
                                          unsigned width_, unsigned height_, unsigned tile_size_)
 		: subgroup(subgroup_), ubershader(ubershader_), async_compute(async_compute_),
-		  width(width_), height(height_), tile_size(tile_size_)
+		  fb_width(width_), fb_height(height_), tile_size(tile_size_)
 {
 	loader.load_scene(path);
 	get_wsi().set_backbuffer_srgb(false);
@@ -419,10 +423,12 @@ SWRenderApplication::SWRenderApplication(const std::string &path, bool subgroup_
 	cam.set_aspect(640.0f / 360.0f);
 	cam.look_at(vec3(0.0f, 0.0f, 3.0f), vec3(0.0f));
 
+#if 0
 	rop.canvas.resize(width, height);
 	rop.depth_canvas.resize(width, height);
 	rasterizer.set_scissor(0, 0, width, height);
 	rasterizer.set_rop(&rop);
+#endif
 
 	EVENT_MANAGER_REGISTER_LATCH(SWRenderApplication, on_device_created, on_device_destroyed, Vulkan::DeviceCreatedEvent);
 	EVENT_MANAGER_REGISTER(SWRenderApplication, on_key_pressed, KeyboardEvent);
@@ -460,17 +466,21 @@ void SWRenderApplication::render_frame(double frame_time, double)
 	auto &scene = loader.get_scene();
 	scene.update_cached_transforms();
 
+#if 0
 	rop.clear_color();
 	rop.clear_depth();
+#endif
 	rasterizer_gpu.clear_color();
 	rasterizer_gpu.clear_depth();
 
 	mat4 vp = cam.get_projection() * cam.get_view();
-	ViewportTransform viewport_transform = { -0.5f, -0.5f, float(width), float(height), 0.0f, 1.0f };
+	ViewportTransform viewport_transform = { -0.5f, -0.5f, float(fb_width), float(fb_height), 0.0f, 1.0f };
 	InputPrimitive input = {};
 	PrimitiveSetup setups[256];
+#if 0
 	TextureSampler sampler;
 	rasterizer.set_sampler(&sampler);
+#endif
 
 	auto &renderables = scene.get_entity_pool().get_component_group<RenderableComponent, SoftwareRenderableComponent, RenderInfoComponent>();
 
@@ -646,9 +656,9 @@ Application *application_create(int argc, char **argv)
 	bool subgroup = true;
 	bool async_compute = false;
 	std::string path;
-	unsigned width = 1280;
-	unsigned height = 720;
-	unsigned tile_size = 16;
+	unsigned width = 640;
+	unsigned height = 360;
+	unsigned tile_size = 8;
 
 	Util::CLICallbacks cbs;
 	cbs.add("--ubershader", [&](Util::CLIParser &) { ubershader = true; });
