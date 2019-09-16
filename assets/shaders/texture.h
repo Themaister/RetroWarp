@@ -43,6 +43,16 @@ int round_down_bits(int u, int subsample)
 	return u >> subsample;
 }
 
+int compute_offset(int x, int y, int blocks_x, int subsample)
+{
+	x = round_down_bits(x, subsample);
+	int block_x = x >> 3;
+	int block_y = y >> 3;
+	int block = (block_y * blocks_x + block_x) * 64;
+	int offset = block + (y & 7) * 8 + (x & 7);
+	return offset;
+}
+
 uvec4 sample_texture_lod(uint variant_index, ivec2 base_uv, int lod)
 {
 	int tex_width = int(render_states[variant_index].texture_width);
@@ -60,6 +70,7 @@ uvec4 sample_texture_lod(uint variant_index, ivec2 base_uv, int lod)
 	uint fmt = uint(render_states[variant_index].texture_fmt);
 	int subsample = int(fmt & 3u);
 	mip_width = round_up_bits(mip_width, subsample);
+	int blocks_x = (mip_width + 7) >> 3;
 
 	ivec2 uv0 = clamp(uv, tex_clamp.xy, tex_clamp.zw) & tex_mask;
 	ivec2 uv1 = clamp(uv + ivec2(1, 0), tex_clamp.xy, tex_clamp.zw) & tex_mask;
@@ -68,10 +79,10 @@ uvec4 sample_texture_lod(uint variant_index, ivec2 base_uv, int lod)
 
 	int offset = render_states[variant_index].texture_offset[lod] >> 1;
 
-	int offset0 = (offset + round_down_bits(uv0.x, subsample) + uv0.y * mip_width) & ((VRAM_SIZE >> 1) - 1);
-	int offset1 = (offset + round_down_bits(uv1.x, subsample) + uv1.y * mip_width) & ((VRAM_SIZE >> 1) - 1);
-	int offset2 = (offset + round_down_bits(uv2.x, subsample) + uv2.y * mip_width) & ((VRAM_SIZE >> 1) - 1);
-	int offset3 = (offset + round_down_bits(uv3.x, subsample) + uv3.y * mip_width) & ((VRAM_SIZE >> 1) - 1);
+	int offset0 = (offset + compute_offset(uv0.x, uv0.y, blocks_x, subsample)) & ((VRAM_SIZE >> 1) - 1);
+	int offset1 = (offset + compute_offset(uv1.x, uv1.y, blocks_x, subsample)) & ((VRAM_SIZE >> 1) - 1);
+	int offset2 = (offset + compute_offset(uv2.x, uv2.y, blocks_x, subsample)) & ((VRAM_SIZE >> 1) - 1);
+	int offset3 = (offset + compute_offset(uv3.x, uv3.y, blocks_x, subsample)) & ((VRAM_SIZE >> 1) - 1);
 	uint raw_sample0 = uint(vram_data[offset0]);
 	uint raw_sample1 = uint(vram_data[offset1]);
 	uint raw_sample2 = uint(vram_data[offset2]);

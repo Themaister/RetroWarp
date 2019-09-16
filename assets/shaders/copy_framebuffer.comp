@@ -9,17 +9,15 @@ layout(local_size_x = 8, local_size_y = 8) in;
 layout(push_constant, std430) uniform Registers
 {
     uint offset;
+    uint blocks_width;
+    uint blocks_height;
     uint width;
     uint height;
 } registers;
 
 layout(set = 0, binding = 0, std430) writeonly buffer VRAM
 {
-#if FMT == 1
-    uint8_t vram[];
-#else
     uint16_t vram[];
-#endif
 };
 
 layout(set = 0, binding = 1, std430) readonly buffer Texture
@@ -29,26 +27,36 @@ layout(set = 0, binding = 1, std430) readonly buffer Texture
 
 void main()
 {
-    if (all(lessThan(gl_GlobalInvocationID.xy, uvec2(registers.width, registers.height))))
-    {
-        uint pixel_index = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * registers.width;
-        uvec4 input_pixel = uvec4(input_colors[pixel_index]);
-#if FMT == 1
-        uint index = registers.offset + gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * ((registers.width + 1u) & ~1u);
-        index &= VRAM_SIZE - 1;
-        vram[index] = uint8_t(input_pixel.g);
-#elif FMT == 0
-        uint index = registers.offset + pixel_index;
-        index &= (VRAM_SIZE >> 1) - 1;
-        vram[index] = uint16_t(pack_argb1555(quantize_argb1555(input_pixel)));
-#elif FMT == 4
-        uint index = registers.offset + pixel_index;
-        index &= (VRAM_SIZE >> 1) - 1;
-        vram[index] = uint16_t(input_pixel.r | (input_pixel.a << 8u));
+    uint block_x = gl_WorkGroupID.x;
+    uint block_y = gl_WorkGroupID.y;
+    uint block_offset = block_y * registers.blocks_width + block_x;
+    uint pixel_index = registers.offset + 64u * block_offset + gl_LocalInvocationIndex;
+
+#if (FMT & 3) == 1
+    uvec4 input_pixel0 = uvec4(0);
+    uvec4 input_pixel1 = uvec4(0);
+    uvec2 coord0 = uvec2(2u, 1u) * gl_GlobalInvocationID.xy;
+    uvec2 coord1 = coord0 + uvec2(1u, 0u);
+    if (all(lessThan(coord0, uvec2(registers.width, registers.height))))
+        input_pixel0 = uvec4(input_colors[coord0.y * registers.width + coord0.x]);
+    if (all(lessThan(coord1, uvec2(registers.width, registers.height))))
+        input_pixel1 = uvec4(input_colors[coord1.y * registers.width + coord1.x]);
 #else
-        uint index = registers.offset + pixel_index;
-        index &= (VRAM_SIZE >> 1) - 1;
-        vram[index] = uint16_t(0xffffu);
+    uvec4 input_pixel = uvec4(0);
+    if (all(lessThan(gl_GlobalInvocationID.xy, uvec2(registers.width, registers.height))))
+        input_pixel = uvec4(input_colors[gl_GlobalInvocationID.y * registers.width + gl_GlobalInvocationID.x]);
 #endif
-    }
+
+    uint output_pixel;
+#if FMT == 1
+    output_pixel = input_pixel0.g | (input_pixel1.g << 8u);
+#elif FMT == 0
+    output_pixel = pack_argb1555(quantize_argb1555(input_pixel));
+#elif FMT == 4
+    output_pixel = input_pixel.r | (input_pixel.a << 8u);
+#else
+    output_pixel = 0xffffu;
+#endif
+    pixel_index &= (VRAM_SIZE >> 1) - 1;
+    vram[pixel_index] = uint16_t(output_pixel);
 }

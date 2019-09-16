@@ -1117,6 +1117,8 @@ void RasterizerGPU::copy_texture_rgba8888_to_vram(uint32_t offset, const uint32_
 	struct Registers
 	{
 		uint32_t offset;
+		uint32_t blocks_width;
+		uint32_t blocks_height;
 		uint32_t width;
 		uint32_t height;
 	} registers;
@@ -1125,18 +1127,21 @@ void RasterizerGPU::copy_texture_rgba8888_to_vram(uint32_t offset, const uint32_
 	{
 	case TextureFormat::ARGB1555:
 	case TextureFormat::LA88:
-		registers.offset = offset >> 1;
+		registers.blocks_width = (width + 7) / 8;
 		break;
 
 	case TextureFormat::I8:
-		registers.offset = offset;
+		registers.blocks_width = (width + 15) / 16;
 		break;
 	}
+
+	registers.offset = offset >> 1;
+	registers.blocks_height = (height + 7) / 8;
 
 	registers.width = width;
 	registers.height = height;
 	cmd->push_constants(&registers, 0, sizeof(registers));
-	cmd->dispatch((width + 7) / 8, (height + 7) / 8, 1);
+	cmd->dispatch(registers.blocks_width, registers.blocks_height, 1);
 	impl->device->submit(cmd);
 }
 
