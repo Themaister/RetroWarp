@@ -167,12 +167,14 @@ int main(int argc, char **argv)
 	bool async_compute = false;
 	std::string path;
 	unsigned tile_size = 16;
+	unsigned num_iterations = 1000;
 
 	Util::CLICallbacks cbs;
 	cbs.add("--ubershader", [&](Util::CLIParser &) { ubershader = true; });
 	cbs.add("--nosubgroup", [&](Util::CLIParser &) { subgroup = false; });
 	cbs.add("--async-compute", [&](Util::CLIParser &) { async_compute = true; });
 	cbs.add("--tile-size", [&](Util::CLIParser &parser) { tile_size = parser.next_uint(); });
+	cbs.add("--iterations", [&](Util::CLIParser &parser) { num_iterations = parser.next_uint(); });
 	cbs.default_handler = [&](const char *arg) { path = arg; };
 	Util::CLIParser parser(std::move(cbs), argc - 1, argv + 1);
 
@@ -403,8 +405,12 @@ int main(int argc, char **argv)
 		}
 	}
 
+	LOGI("Primitive count: %u\n", unsigned(commands.size()));
+
+	rasterizer.flush();
+	device.wait_idle();
 	auto start_run = Util::get_current_time_nsecs();
-	for (unsigned i = 0; i < 1000; i++)
+	for (unsigned i = 0; i < num_iterations; i++)
 	{
 		device.next_frame_context();
 		rasterizer.clear_depth();
@@ -424,7 +430,7 @@ int main(int argc, char **argv)
 	}
 	device.wait_idle();
 	auto end_run = Util::get_current_time_nsecs();
-	LOGI("Total time: %.3f s\n", (end_run - start_run) * 1e-9);
+	LOGI("CPU time: %.3f ms / frame\n", (double(end_run - start_run) / double(num_iterations)) * 1e-6);
 
 	rasterizer.save_canvas("canvas.png");
 }
