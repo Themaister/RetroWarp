@@ -13,7 +13,6 @@
 #include "texture_files.hpp"
 #include "gltf.hpp"
 #include "camera.hpp"
-#include "approximate_divider.hpp"
 #include "rasterizer_gpu.hpp"
 #include "os_filesystem.hpp"
 #include "scene_loader.hpp"
@@ -27,80 +26,6 @@ using namespace Granite;
 
 constexpr int TEXTURE_BASE_LEVEL = 1;
 
-#if 0
-struct TextureSampler : Sampler
-{
-	Texel sample(int u, int v) override
-	{
-		if (u < 0)
-			u = 0;
-		if (v < 0)
-			v = 0;
-		if (unsigned(u) >= layout->get_width())
-			u = layout->get_width() - 1;
-		if (unsigned(v) >= layout->get_height())
-			v = layout->get_height() - 1;
-
-		auto *res = layout->data_2d<u8vec4>(u, v);
-		return { res->x, res->y, res->z, res->w };
-	}
-
-	const Vulkan::TextureFormatLayout *layout = nullptr;
-};
-
-struct CanvasROP : ROP
-{
-	bool save_canvas(const char *path) const;
-	void fill_alpha_opaque();
-	void emit_pixel(int x, int y, uint16_t z, const Texel &texel) override;
-	Canvas<uint32_t> canvas;
-	Canvas<uint16_t> depth_canvas;
-
-	void clear_depth(uint16_t z = 0xffff);
-	void clear_color(uint32_t c = 0);
-};
-
-void CanvasROP::clear_depth(uint16_t z)
-{
-	for (unsigned y = 0; y < depth_canvas.get_height(); y++)
-		for (unsigned x = 0; x < depth_canvas.get_width(); x++)
-			depth_canvas.get(x, y) = z;
-}
-
-void CanvasROP::clear_color(uint32_t c)
-{
-	for (unsigned y = 0; y < canvas.get_height(); y++)
-		for (unsigned x = 0; x < canvas.get_width(); x++)
-			canvas.get(x, y) = c;
-}
-
-void CanvasROP::emit_pixel(int x, int y, uint16_t z, const Texel &texel)
-{
-	assert(x >= 0 && y >= 0 && x < int(canvas.get_width()) && y < int(canvas.get_height()));
-	auto &v = canvas.get(x, y);
-	auto &d = depth_canvas.get(x, y);
-
-	if (z < d)
-	{
-		d = z;
-		v = (uint32_t(texel.r) << 0) | (uint32_t(texel.g) << 8) | (uint32_t(texel.b) << 16) | (uint32_t(texel.a) << 24);
-	}
-}
-
-bool CanvasROP::save_canvas(const char *path) const
-{
-	const void *data = canvas.get_data();
-	return stbi_write_png(path, canvas.get_width(), canvas.get_height(), 4, data, canvas.get_width() * 4);
-}
-
-void CanvasROP::fill_alpha_opaque()
-{
-	for (unsigned y = 0; y < canvas.get_height(); y++)
-		for (unsigned x = 0; x < canvas.get_width(); x++)
-			canvas.get(x, y) |= 0xff000000u;
-}
-#endif
-
 struct SoftwareRenderableComponent : ComponentBase
 {
 	GRANITE_COMPONENT_TYPE_DECL(SoftwareRenderableComponent)
@@ -111,7 +36,6 @@ struct SoftwareRenderableComponent : ComponentBase
 	unsigned state_index;
 };
 
-
 struct SWRenderApplication : Application, EventHandler
 {
 	explicit SWRenderApplication(const std::string &path, bool subgroup, bool ubershader, bool async_compute,
@@ -119,8 +43,6 @@ struct SWRenderApplication : Application, EventHandler
 	void render_frame(double, double) override;
 
 	SceneLoader loader;
-	//CanvasROP rop;
-	RasterizerCPU rasterizer;
 	FPSCamera cam;
 	RasterizerGPU rasterizer_gpu;
 
@@ -423,13 +345,6 @@ SWRenderApplication::SWRenderApplication(const std::string &path, bool subgroup_
 	cam.set_aspect(640.0f / 360.0f);
 	cam.look_at(vec3(0.0f, 0.0f, 3.0f), vec3(0.0f));
 
-#if 0
-	rop.canvas.resize(width, height);
-	rop.depth_canvas.resize(width, height);
-	rasterizer.set_scissor(0, 0, width, height);
-	rasterizer.set_rop(&rop);
-#endif
-
 	EVENT_MANAGER_REGISTER_LATCH(SWRenderApplication, on_device_created, on_device_destroyed, Vulkan::DeviceCreatedEvent);
 	EVENT_MANAGER_REGISTER(SWRenderApplication, on_key_pressed, KeyboardEvent);
 }
@@ -466,10 +381,6 @@ void SWRenderApplication::render_frame(double frame_time, double)
 	auto &scene = loader.get_scene();
 	scene.update_cached_transforms();
 
-#if 0
-	rop.clear_color();
-	rop.clear_depth();
-#endif
 	rasterizer_gpu.clear_color();
 	rasterizer_gpu.clear_depth();
 
@@ -477,10 +388,6 @@ void SWRenderApplication::render_frame(double frame_time, double)
 	ViewportTransform viewport_transform = { -0.5f, -0.5f, float(fb_width), float(fb_height), 0.0f, 1.0f };
 	InputPrimitive input = {};
 	PrimitiveSetup setups[256];
-#if 0
-	TextureSampler sampler;
-	rasterizer.set_sampler(&sampler);
-#endif
 
 	auto &renderables = scene.get_entity_pool().get_component_group<RenderableComponent, SoftwareRenderableComponent, RenderInfoComponent>();
 
@@ -552,7 +459,6 @@ void SWRenderApplication::render_frame(double frame_time, double)
 	else
 		LOGI("Cached %u primitive setups!\n", unsigned(setup_cache.size()));
 
-#if 1
 	for (auto &setup : setup_cache)
 	{
 		if (queue_dump_frame)
@@ -597,40 +503,6 @@ void SWRenderApplication::render_frame(double frame_time, double)
 		if (queue_dump_frame)
 			dump_primitives(&setup.setup, 1);
 	}
-#else
-	for (unsigned i = 0; i < 40; i++)
-	{
-		InputPrimitive prim = {};
-		prim.vertices[0].x = -0.5f + i / 200.0f;
-		prim.vertices[0].y = -0.5f + i / 200.0f;
-		prim.vertices[1].x = -0.5f + i / 200.0f;
-		prim.vertices[1].y = +0.5f + i / 200.0f;
-		prim.vertices[2].x = +0.5f + i / 200.0f;
-		prim.vertices[2].y = -0.5f + i / 200.0f;
-		prim.vertices[0].w = 1.0f;
-		prim.vertices[1].w = 1.0f;
-		prim.vertices[2].w = 1.0f;
-		prim.vertices[0].z = i / 64.0f;
-		prim.vertices[1].z = i / 64.0f;
-		prim.vertices[2].z = i / 64.0f;
-		if (i & 1)
-		{
-			prim.vertices[0].color[0] = 1.0f;
-			prim.vertices[1].color[1] = 1.0f;
-			prim.vertices[2].color[2] = 1.0f;
-		}
-		else
-		{
-			prim.vertices[0].color[2] = 1.0f;
-			prim.vertices[1].color[1] = 1.0f;
-			prim.vertices[2].color[0] = 1.0f;
-		}
-		rasterizer_gpu.set_texture(*setup_cache.front().view);
-		rasterizer_gpu.set_combiner_mode(COMBINER_MODE_COLOR);
-		unsigned count = setup_clipped_triangles(setups, prim, CullMode::None, viewport_transform);
-		rasterizer_gpu.rasterize_primitives(setups, count);
-	}
-#endif
 
 	auto image_gpu = rasterizer_gpu.copy_to_framebuffer();
 

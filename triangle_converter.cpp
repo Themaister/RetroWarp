@@ -4,6 +4,9 @@
 #include <cmath>
 #include <assert.h>
 
+// A very straight forward implementation of a triangle clipper and setup.
+// It is not optimized at all.
+
 namespace RetroWarp
 {
 static int16_t clamp_float_int16(float v)

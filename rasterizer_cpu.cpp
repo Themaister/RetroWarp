@@ -5,6 +5,8 @@
 #include <assert.h>
 #include <math.h>
 
+// A crude implementation which used during bringup.
+
 namespace RetroWarp
 {
 void RasterizerCPU::set_scissor(int x, int y, int width, int height)

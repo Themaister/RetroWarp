@@ -2,6 +2,8 @@
 
 #include "primitive_setup.hpp"
 
+// A crude implementation which used during bringup.
+
 namespace RetroWarp
 {
 struct Texel

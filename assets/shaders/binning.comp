@@ -71,7 +71,7 @@ shared uint merged_mask;
 #if !UBERSHADER
 uint allocate_work_offset(uint variant_index)
 {
-#if !SUBGROUP || 0
+#if !SUBGROUP
     return atomicAdd(item_counts_per_variant[variant_index].x, 1u);
 #else
     // Merge atomic operations.
