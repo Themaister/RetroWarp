@@ -6,6 +6,8 @@ layout(set = 0, binding = 0, std430) writeonly buffer IndirectBuffer
     uvec4 indirect[];
 };
 
+// Clears out atomic variables which need to start at 0 when using split shading architecture.
+
 void main()
 {
     indirect[gl_GlobalInvocationID.x] = uvec4(0u, 1u, 1u, 0u);

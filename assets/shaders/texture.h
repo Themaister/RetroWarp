@@ -4,6 +4,10 @@
 #include "render_state.h"
 #include "pixel_conv.h"
 
+// Trilinear mipmapped textures all done "by hand".
+// Textures are referenced with "descriptors" which we parse by hand as well.
+// Fairly trivial implementation.
+
 uvec4 filter_horiz(uvec4 a, uvec4 b, int l)
 {
 	return a * (32u - uint(l)) + b * uint(l);

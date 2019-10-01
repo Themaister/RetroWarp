@@ -1,6 +1,8 @@
 #ifndef COMBINER_H_
 #define COMBINER_H_
 
+// A trivial combiner, but you get the idea.
+
 #define COMBINER_SAMPLE_BIT (0x80u)
 #define COMBINER_ADD_CONSTANT_BIT (0x40u)
 #define COMBINER_MODE_TEX_MOD_COLOR 0u

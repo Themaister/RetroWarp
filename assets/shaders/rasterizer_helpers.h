@@ -1,6 +1,12 @@
 #ifndef RASTERIZER_HELPERS_H_
 #define RASTERIZER_HELPERS_H_
 
+// Implements rasterization and interpolation for rendering primitives.
+// Here we use span equations to implement rasterization.
+
+// Barycentrics are however used for attributes rather than plane equations for each attribute.
+// This was to simplify things, implementing full fixed point plane equations is actually hard.
+
 #ifndef RENDER_STATE_H_
 #error "Must include render_state.h before rasterizer_helpers.h"
 #endif

@@ -52,3 +52,8 @@ At the end, performance metrics are reported in time / iteration (i.e. frame).
 - `--iterations`: Number of iterations.
 
 Resolution is specified in the dump as it contains post-triangle setup data and cannot be rescaled.
+
+## Implementation
+
+`rasterizer_gpu.hpp` and `rasterizer_gpu.cpp` implement the Vulkan side of things.
+Shaders are contained in `assets/shaders`.

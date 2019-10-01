@@ -1,6 +1,9 @@
 #ifndef ROP_H_
 #define ROP_H_
 
+// Various utilities for blending and depth testing.
+// Quite trivial implementation.
+
 #include "render_state.h"
 #include "pixel_conv.h"
 #include "dither.h"

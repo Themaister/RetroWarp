@@ -1,4 +1,9 @@
 #version 450
+
+// This shader performs rasterization, shading and combining when using split shader architecture.
+// Output is color, depth and raster mask, which will be consumed by rop.comp.
+// This shader is dispatched indirectly.
+
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_8bit_storage : require
 #extension GL_EXT_scalar_block_layout : require
@@ -30,7 +35,7 @@ layout(local_size_x = TILE_SIZE_SQUARE) in;
 
 struct TileRasterWork
 {
-   uint x, y, instance, prim;
+    uint x, y, instance, prim;
 };
 
 layout(std430, set = 0, binding = 0) readonly buffer WorkList

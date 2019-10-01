@@ -1,6 +1,8 @@
 #ifndef DITHER_H_
 #define DITHER_H_
 
+// Classic 4x4 bayer dither.
+
 const uint DITHER_LUT[16] = uint[](
 		0, 4, 1, 5,
 		6, 2, 7, 3,

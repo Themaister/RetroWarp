@@ -1,4 +1,7 @@
 #version 450
+
+// Consumes result from binning_low_res.comp, bins at a finer resolution (8x8 or 16x16 blocks).
+
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_8bit_storage : require
 #extension GL_EXT_scalar_block_layout : require
