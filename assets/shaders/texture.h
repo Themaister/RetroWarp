@@ -143,8 +143,13 @@ uvec4 sample_texture_lod(uint variant_index, ivec2 base_uv, int lod, uint fmt)
 
 uvec4 sample_texture(uint variant_index, vec2 f_uv, float f_lod)
 {
+#if UBERSHADER
 	uint fmt = uint(render_states[variant_index].texture_fmt);
 	bool trilinear = (fmt & TEXTURE_FMT_FILTER_MIP_LINEAR_BIT) != 0u;
+#else
+	const uint fmt = (SHADER_VARIANT_MASK >> 16u) & 0xffu;
+	const bool trilinear = (fmt & TEXTURE_FMT_FILTER_MIP_LINEAR_BIT) != 0u;
+#endif
 	if (!trilinear)
 		f_lod += 0.5;
 
@@ -156,13 +161,19 @@ uvec4 sample_texture(uint variant_index, vec2 f_uv, float f_lod)
 
 	ivec2 base_uv = ivec2(round(f_uv * 32.0));
 	uvec4 sample_l0 = sample_texture_lod(variant_index, base_uv, a_lod, fmt);
-	if (lod_frac != 0)
+
+#if !UBERSHADER
+	if (trilinear)
+#endif
 	{
-		int b_lod = clamp(a_lod + 1, 0, texture_max_lod);
-		if (a_lod != b_lod)
+		if (lod_frac != 0)
 		{
-			uvec4 sample_l1 = sample_texture_lod(variant_index, base_uv, b_lod, fmt);
-			sample_l0 = filter_trilinear(sample_l0, sample_l1, lod_frac);
+			int b_lod = clamp(a_lod + 1, 0, texture_max_lod);
+			if (a_lod != b_lod)
+			{
+				uvec4 sample_l1 = sample_texture_lod(variant_index, base_uv, b_lod, fmt);
+				sample_l0 = filter_trilinear(sample_l0, sample_l1, lod_frac);
+			}
 		}
 	}
 	return sample_l0;

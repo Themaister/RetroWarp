@@ -39,7 +39,6 @@ struct RasterizerGPU::Impl
 	bool subgroup = false;
 	bool ubershader = false;
 	bool async_compute = false;
-	unsigned num_state_indices = 0;
 
 	struct
 	{
@@ -87,17 +86,17 @@ struct RasterizerGPU::Impl
 	{
 		BufferHandle positions;
 		BufferHandle attributes;
-		BufferHandle state_index;
+		BufferHandle shader_state_index;
 		BufferHandle render_state_index;
 		BufferHandle render_state;
 		BufferHandle positions_gpu;
 		BufferHandle attributes_gpu;
-		BufferHandle state_index_gpu;
+		BufferHandle shader_state_index_gpu;
 		BufferHandle render_state_index_gpu;
 		BufferHandle render_state_gpu;
 		PrimitiveSetupPos *mapped_positions = nullptr;
 		PrimitiveSetupAttr *mapped_attributes = nullptr;
-		uint8_t *mapped_state_index = nullptr;
+		uint8_t *mapped_shader_state_index = nullptr;
 		uint16_t *mapped_render_state_index = nullptr;
 		RenderState *mapped_render_state = nullptr;
 		unsigned count = 0;
@@ -113,9 +112,10 @@ struct RasterizerGPU::Impl
 
 	struct
 	{
-		//const ImageView *image_views[64] = {};
-		//unsigned state_count = 0;
-		//const ImageView *current_image = nullptr;
+		uint32_t shader_states[MAX_NUM_SHADER_STATE_INDICES] = {};
+		unsigned shader_state_count = 0;
+		uint32_t current_shader_state = 0;
+
 		RenderState last_render_state;
 		RenderState current_render_state;
 		unsigned render_state_count = 0;
@@ -159,6 +159,8 @@ struct RasterizerGPU::Impl
 	int max_tiles_y = 0;
 	int max_tiles_x_low_res = 0;
 	int max_tiles_y_low_res = 0;
+
+	uint32_t compute_shader_state() const;
 };
 
 struct FBInfo
@@ -201,7 +203,20 @@ void RasterizerGPU::Impl::reset_staging()
 {
 	staging = {};
 	state.render_state_count = 0;
-	//state.state_count = 0;
+	state.shader_state_count = 0;
+}
+
+uint32_t RasterizerGPU::Impl::compute_shader_state() const
+{
+	// Ignore shader state for ubershaders.
+	if (ubershader)
+		return 0;
+
+	uint32_t shader_state = 0;
+	shader_state |= state.current_render_state.combiner_state;
+	shader_state |= state.current_render_state.alpha_threshold << 8u;
+	shader_state |= state.current_render_state.tex.texture_fmt << 16u;
+	return shader_state;
 }
 
 BBox RasterizerGPU::Impl::compute_bbox(const PrimitiveSetup &setup) const
@@ -279,7 +294,7 @@ void RasterizerGPU::Impl::begin_staging()
 	staging.attributes_gpu = device->create_buffer(info);
 	info.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 	info.size = MAX_PRIMITIVES * sizeof(uint8_t);
-	staging.state_index_gpu = device->create_buffer(info);
+	staging.shader_state_index_gpu = device->create_buffer(info);
 	info.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 	info.size = MAX_PRIMITIVES * sizeof(uint16_t);
 	staging.render_state_index_gpu = device->create_buffer(info);
@@ -292,8 +307,8 @@ void RasterizerGPU::Impl::begin_staging()
 	staging.mapped_attributes = static_cast<PrimitiveSetupAttr *>(
 			device->map_host_buffer(*staging.attributes_gpu,
 			                       MEMORY_ACCESS_WRITE_BIT));
-	staging.mapped_state_index = static_cast<uint8_t *>(
-			device->map_host_buffer(*staging.state_index_gpu,
+	staging.mapped_shader_state_index = static_cast<uint8_t *>(
+			device->map_host_buffer(*staging.shader_state_index_gpu,
 			                        MEMORY_ACCESS_WRITE_BIT));
 	staging.mapped_render_state = static_cast<RenderState *>(
 			device->map_host_buffer(*staging.render_state_gpu,
@@ -302,12 +317,12 @@ void RasterizerGPU::Impl::begin_staging()
 			device->map_host_buffer(*staging.render_state_index_gpu,
 			                        MEMORY_ACCESS_WRITE_BIT));
 
-	if (staging.mapped_positions && staging.mapped_attributes && staging.mapped_state_index &&
+	if (staging.mapped_positions && staging.mapped_attributes && staging.mapped_shader_state_index &&
 	    staging.mapped_render_state && staging.mapped_render_state_index)
 	{
 		staging.positions = staging.positions_gpu;
 		staging.attributes = staging.attributes_gpu;
-		staging.state_index = staging.state_index_gpu;
+		staging.shader_state_index = staging.shader_state_index_gpu;
 		staging.render_state = staging.render_state_gpu;
 		staging.render_state_index = staging.render_state_index_gpu;
 		staging.host_visible = true;
@@ -324,7 +339,7 @@ void RasterizerGPU::Impl::begin_staging()
 		staging.attributes = device->create_buffer(info);
 
 		info.size = MAX_PRIMITIVES * sizeof(uint8_t);
-		staging.state_index = device->create_buffer(info);
+		staging.shader_state_index = device->create_buffer(info);
 
 		info.size = MAX_PRIMITIVES * sizeof(uint16_t);
 		staging.render_state_index = device->create_buffer(info);
@@ -338,8 +353,8 @@ void RasterizerGPU::Impl::begin_staging()
 		staging.mapped_attributes = static_cast<PrimitiveSetupAttr *>(
 				device->map_host_buffer(*staging.attributes,
 				                        MEMORY_ACCESS_WRITE_BIT));
-		staging.mapped_state_index = static_cast<uint8_t *>(
-				device->map_host_buffer(*staging.state_index,
+		staging.mapped_shader_state_index = static_cast<uint8_t *>(
+				device->map_host_buffer(*staging.shader_state_index,
 				                        MEMORY_ACCESS_WRITE_BIT));
 
 		staging.mapped_render_state = static_cast<RenderState *>(
@@ -362,8 +377,8 @@ void RasterizerGPU::Impl::end_staging()
 		device->unmap_host_buffer(*staging.positions, MEMORY_ACCESS_WRITE_BIT);
 	if (staging.mapped_attributes)
 		device->unmap_host_buffer(*staging.attributes, MEMORY_ACCESS_WRITE_BIT);
-	if (staging.mapped_state_index)
-		device->unmap_host_buffer(*staging.state_index, MEMORY_ACCESS_WRITE_BIT);
+	if (staging.mapped_shader_state_index)
+		device->unmap_host_buffer(*staging.shader_state_index, MEMORY_ACCESS_WRITE_BIT);
 	if (staging.mapped_render_state_index)
 		device->unmap_host_buffer(*staging.render_state_index, MEMORY_ACCESS_WRITE_BIT);
 	if (staging.mapped_render_state)
@@ -371,7 +386,7 @@ void RasterizerGPU::Impl::end_staging()
 
 	staging.mapped_positions = nullptr;
 	staging.mapped_attributes = nullptr;
-	staging.mapped_state_index = nullptr;
+	staging.mapped_shader_state_index = nullptr;
 	staging.mapped_render_state_index = nullptr;
 	staging.mapped_render_state = nullptr;
 
@@ -380,7 +395,7 @@ void RasterizerGPU::Impl::end_staging()
 		auto cmd = device->request_command_buffer(CommandBuffer::Type::AsyncTransfer);
 		cmd->copy_buffer(*staging.positions_gpu, 0, *staging.positions, 0, staging.count * sizeof(PrimitiveSetupPos));
 		cmd->copy_buffer(*staging.attributes_gpu, 0, *staging.attributes, 0, staging.count * sizeof(PrimitiveSetupAttr));
-		cmd->copy_buffer(*staging.state_index_gpu, 0, *staging.state_index, 0, staging.count * sizeof(uint8_t));
+		cmd->copy_buffer(*staging.shader_state_index_gpu, 0, *staging.shader_state_index, 0, staging.count * sizeof(uint8_t));
 		cmd->copy_buffer(*staging.render_state_index_gpu, 0, *staging.render_state_index, 0, staging.count * sizeof(uint16_t));
 		cmd->copy_buffer(*staging.render_state_gpu, 0, *staging.render_state, 0, state.render_state_count * sizeof(RenderState));
 		Semaphore sem;
@@ -464,7 +479,7 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd, bool ubershader)
 		cmd.set_storage_buffer(0, 6, *tile_count.tile_offset[tile_instance_data.index]);
 		cmd.set_storage_buffer(0, 7, *raster_work.item_count_per_variant);
 		cmd.set_storage_buffer(0, 8, *raster_work.work_list_per_variant);
-		cmd.set_storage_buffer(0, 9, *staging.state_index_gpu);
+		cmd.set_storage_buffer(0, 9, *staging.shader_state_index_gpu);
 	}
 
 	auto &features = device->get_device_features();
@@ -600,15 +615,20 @@ void RasterizerGPU::Impl::dispatch_combiner_work(CommandBuffer &cmd)
 		});
 	}
 
-	// HACK: We just have one shader variant for now ...
-	unsigned variant = 0;
-	cmd.set_storage_buffer(0, 0, *raster_work.work_list_per_variant,
-			variant * (MAX_NUM_TILE_INSTANCES + 1) * sizeof(TileRasterWork),
-			(MAX_NUM_TILE_INSTANCES + 1) * sizeof(TileRasterWork));
-	cmd.dispatch_indirect(*raster_work.item_count_per_variant, 16 * variant);
+	cmd.set_specialization_constant_mask(1);
+
+	for (unsigned variant = 0; variant < state.shader_state_count; variant++)
+	{
+		cmd.set_specialization_constant(0, state.shader_states[variant]);
+		cmd.set_storage_buffer(0, 0, *raster_work.work_list_per_variant,
+		                       variant * (MAX_NUM_TILE_INSTANCES + 1) * sizeof(TileRasterWork),
+		                       (MAX_NUM_TILE_INSTANCES + 1) * sizeof(TileRasterWork));
+		cmd.dispatch_indirect(*raster_work.item_count_per_variant, 16 * variant);
+	}
 
 	cmd.end_region();
 	cmd.enable_subgroup_size_control(false);
+	cmd.set_specialization_constant_mask(0);
 }
 
 void RasterizerGPU::Impl::set_fb_info(CommandBuffer &cmd)
@@ -647,17 +667,9 @@ void RasterizerGPU::Impl::run_rop_ubershader(CommandBuffer &cmd)
 	cmd.set_storage_buffer(0, 2, *binning.mask_buffer_coarse[tile_instance_data.index]);
 	cmd.set_storage_buffer(0, 3, *staging.positions_gpu);
 	cmd.set_storage_buffer(0, 4, *staging.attributes_gpu);
-	cmd.set_uniform_buffer(0, 5, *staging.state_index_gpu);
+	cmd.set_uniform_buffer(0, 5, *staging.shader_state_index_gpu);
 	cmd.set_uniform_buffer(0, 6, *staging.render_state_index_gpu);
 	cmd.set_uniform_buffer(0, 7, *staging.render_state_gpu);
-
-#if 0
-	for (unsigned i = 0; i < num_state_indices; i++)
-	{
-		cmd.set_texture(1, i, i < state.state_count ? *state.image_views[i] : *state.image_views[0],
-		                StockSampler::TrilinearWrap);
-	}
-#endif
 
 	auto &features = device->get_device_features();
 	const VkSubgroupFeatureFlags required = VK_SUBGROUP_FEATURE_BASIC_BIT |
@@ -733,6 +745,7 @@ void RasterizerGPU::Impl::run_rop(CommandBuffer &cmd)
 	cmd.set_storage_buffer(0, 6, *tile_count.tile_offset[tile_instance_data.index]);
 	cmd.set_uniform_buffer(0, 7, *staging.render_state_index_gpu);
 	cmd.set_uniform_buffer(0, 8, *staging.render_state_gpu);
+
 	cmd.dispatch((width + tile_size - 1) / tile_size, (height + tile_size - 1) / tile_size, 1);
 	cmd.end_region();
 }
@@ -996,7 +1009,6 @@ void RasterizerGPU::Impl::init(Device &device_, bool subgroup_, bool ubershader_
 	subgroup = subgroup_;
 	ubershader = ubershader_;
 	async_compute = async_compute_;
-	num_state_indices = ubershader ? 16 : 64;
 	tile_size = tile_size_;
 
 	tile_size_log2 = trailing_zeroes(tile_size);
@@ -1212,7 +1224,11 @@ void RasterizerGPU::set_scissor(int x, int y, int width, int height)
 void RasterizerGPU::Impl::queue_primitive(const PrimitiveSetup &setup)
 {
 	unsigned num_conservative_tiles = ubershader ? 0 : compute_num_conservative_tiles(setup);
-	//bool state_changed = state.state_count != 0 && state.current_image != state.image_views[state.state_count - 1];
+
+	state.current_shader_state = compute_shader_state();
+	bool shader_state_changed = state.shader_state_count != 0 &&
+	                            state.current_shader_state != state.shader_states[state.shader_state_count - 1];
+
 	bool render_state_changed = memcmp(&state.current_render_state, &state.last_render_state, sizeof(RenderState)) != 0;
 
 	bool need_flush = false;
@@ -1220,8 +1236,8 @@ void RasterizerGPU::Impl::queue_primitive(const PrimitiveSetup &setup)
 		need_flush = true;
 	else if (staging.num_conservative_tile_instances + num_conservative_tiles > MAX_NUM_TILE_INSTANCES)
 		need_flush = true;
-	//else if (state_changed && state.state_count == num_state_indices)
-	//	need_flush = true;
+	else if (shader_state_changed && state.shader_state_count == MAX_NUM_SHADER_STATE_INDICES)
+		need_flush = true;
 	else if (render_state_changed && state.render_state_count == MAX_NUM_RENDER_STATE_INDICES)
 		need_flush = true;
 
@@ -1231,19 +1247,17 @@ void RasterizerGPU::Impl::queue_primitive(const PrimitiveSetup &setup)
 	if (staging.count == 0)
 		begin_staging();
 
-	//unsigned current_state;
+	unsigned current_shader_state;
 	unsigned current_render_state;
 
-#if 0
-	if (state.state_count == 0 || state_changed)
+	if (state.shader_state_count == 0 || shader_state_changed)
 	{
-		state.image_views[state.state_count] = state.current_image;
-		current_state = state.state_count;
-		state.state_count++;
+		state.shader_states[state.shader_state_count] = state.current_shader_state;
+		current_shader_state = state.shader_state_count;
+		state.shader_state_count++;
 	}
 	else
-		current_state = state.state_count - 1;
-#endif
+		current_shader_state = state.shader_state_count - 1;
 
 	if (state.render_state_count == 0 || render_state_changed)
 	{
@@ -1257,7 +1271,7 @@ void RasterizerGPU::Impl::queue_primitive(const PrimitiveSetup &setup)
 
 	staging.mapped_positions[staging.count] = setup.pos;
 	staging.mapped_attributes[staging.count] = setup.attr;
-	staging.mapped_state_index[staging.count] = 0;
+	staging.mapped_shader_state_index[staging.count] = current_shader_state;
 	staging.mapped_render_state_index[staging.count] = current_render_state;
 
 	staging.count++;

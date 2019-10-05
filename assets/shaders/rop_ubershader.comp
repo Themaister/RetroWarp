@@ -1,6 +1,7 @@
 #version 450
 
 // Combines combiner.comp and rop.comp into one beast of a shader.
+#define UBERSHADER 1
 
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_8bit_storage : require

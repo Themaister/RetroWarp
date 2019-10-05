@@ -23,6 +23,9 @@ layout(local_size_x = TILE_SIZE_SQUARE) in;
 layout(local_size_x = TILE_SIZE_SQUARE) in;
 #endif
 
+#define UBERSHADER 0
+layout(constant_id = 0) const uint SHADER_VARIANT_MASK = 0u;
+
 #include "combiner.h"
 
 #define RENDER_STATE_INDEX_BUFFER 6
@@ -146,7 +149,7 @@ void main()
     }
 
     uint variant = uint(render_state_indices[primitive_index]);
-    uint combiner_state = uint(render_states[variant].combiner_state);
+    const uint combiner_state = SHADER_VARIANT_MASK & 0xffu;
 
     uvec4 tex = uvec4(0);
     if ((combiner_state & COMBINER_SAMPLE_BIT) != 0u)
@@ -171,7 +174,8 @@ void main()
     }
 
     uint alpha = uint(round(255.0 * clamp(tex.a, 0.0, 1.0)));
-    if (alpha < uint(render_states[variant].alpha_threshold))
+    const uint alpha_threshold = (SHADER_VARIANT_MASK >> 8u) & 0xffu;
+    if (alpha < alpha_threshold)
     {
         flag_tiles[tile_instance_index].flag[local_pixel] = uint8_t(0);
         return;
