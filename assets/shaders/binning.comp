@@ -13,6 +13,7 @@
 #extension GL_KHR_shader_subgroup_arithmetic : require
 layout(local_size_x_id = 0) in;
 #else
+// Reasonble default. For AMD (64 threads), subgroups are definitely supported, so this won't be hit.
 layout(local_size_x = 32) in;
 #endif
 
@@ -49,6 +50,8 @@ layout(std430, set = 0, binding = 7) buffer IndirectBuffer
     uvec4 item_counts_per_variant[];
 };
 
+// This can actually be uint16_t, but AMD doesn't seem to support loading uint16_t in SMEM unit,
+// the memory traffic for this data structure is not relevant anyways.
 struct TileRasterWork
 {
     uint tile_x, tile_y;
@@ -78,6 +81,7 @@ uint allocate_work_offset(uint variant_index)
     return atomicAdd(item_counts_per_variant[variant_index].x, 1u);
 #else
     // Merge atomic operations.
+    // XXX: This is kinda sketchy, and almost all shader compilers fail on a slightly different implementation of this loop.
     bool work_to_do = true;
     uint res;
     do
@@ -88,7 +92,7 @@ uint allocate_work_offset(uint variant_index)
             uint count = subgroupBallotBitCount(active_mask);
             uint work_offset = 0u;
             if (subgroupElect())
-            work_offset = atomicAdd(item_counts_per_variant[variant_index].x, count);
+                work_offset = atomicAdd(item_counts_per_variant[variant_index].x, count);
 
             work_offset = subgroupBroadcastFirst(work_offset);
             work_offset += subgroupBallotExclusiveBitCount(active_mask);
@@ -109,6 +113,8 @@ void main()
 
     int linear_tile = tile.y * MAX_TILES_X + tile.x;
 #if SUBGROUP
+    // Spec is unclear how gl_LocalInvocationIndex is mapped to gl_SubgroupInvocationID, so synthesize our own.
+    // We know the subgroups are fully occupied with VK_EXT_subgroup_size_control already.
     uint local_index = gl_SubgroupInvocationID;
     int mask_index = int(gl_SubgroupInvocationID + gl_SubgroupID * gl_SubgroupSize + gl_WorkGroupID.x * gl_WorkGroupSize.x);
 #else
@@ -123,6 +129,8 @@ void main()
         int linear_tile_lowres = (tile.y >> TILE_DOWNSAMPLE_LOG2) * MAX_TILES_X_LOW_RES + (tile.x >> TILE_DOWNSAMPLE_LOG2);
         int binned_bitmask_offset = linear_tile_lowres * TILE_BINNING_STRIDE + mask_index;
 
+        // Each threads works on 32 primitives at once. Most likely, we'll only loop a few times here
+        // due to low-res prepass binning having completed before.
         uint low_res_binned = binned_bitmask_low_res[binned_bitmask_offset];
         while (low_res_binned != 0u)
         {
@@ -138,13 +146,18 @@ void main()
         group_bin_to_tile = binned != 0u;
     }
 
+    // Now, we reduce the group_bin_to_tile to a single u32 bitmask which is used as the highest level
+    // bitmap which we can loop over.
+
 #if SUBGROUP
     uvec4 ballot_result = subgroupBallot(group_bin_to_tile);
+
 #if !UBERSHADER
     uint bit_count = uint(bitCount(binned));
     uint instance_offset = 0u;
     if (subgroupAny(bit_count != 0u))
     {
+        // Allocate tile instance space for all threads in subgroup in one go.
         uint total_bit_count = subgroupAdd(bit_count);
 
         if (subgroupElect())
@@ -154,11 +167,12 @@ void main()
         instance_offset = subgroupBroadcastFirst(instance_offset);
         instance_offset += subgroupInclusiveAdd(bit_count) - bit_count;
     }
-
 #endif
+
     if (subgroupElect())
     {
         uint binned_bitmask_offset = uint(TILE_BINNING_STRIDE_COARSE * linear_tile);
+        // gl_SubgroupSize of 128 is a theoretical thing, but no GPU does that ...
         if (gl_SubgroupSize == 64u)
         {
             binned_bitmask_coarse[binned_bitmask_offset + 2u * gl_WorkGroupID.x] = ballot_result.x;
@@ -194,6 +208,7 @@ void main()
 #endif
 
 #if !UBERSHADER
+    // Distribute shading work.
     if (bit_count != 0u)
         tile_instance_offset[linear_tile * TILE_BINNING_STRIDE + mask_index] = uint16_t(instance_offset);
 

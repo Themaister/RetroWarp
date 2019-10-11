@@ -23,6 +23,7 @@ layout(local_size_x = TILE_SIZE_SQUARE) in;
 layout(local_size_x = TILE_SIZE_SQUARE) in;
 #endif
 
+// Static shader state is encoded in this specialization constant.
 #define UBERSHADER 0
 layout(constant_id = 0) const uint SHADER_VARIANT_MASK = 0u;
 
@@ -113,6 +114,7 @@ void main()
     int x = int(tile_x * uint(TILE_WIDTH) + gl_LocalInvocationID.x);
     int y = int(tile_y * uint(TILE_HEIGHT) + gl_LocalInvocationID.y);
 #else
+    // Linearize groups of 4 indices into a quad. This is so we can use subgroupShuffleXor and DerivativeGroupLinear.
     uint quad_index = local_index >> 2u;
     uint quad_x = quad_index % (TILE_SIZE >> 1u);
     uint quad_y = quad_index / (TILE_SIZE >> 1u);
@@ -145,6 +147,8 @@ void main()
     if (!has_coverage)
     {
         flag_tiles[tile_instance_index].flag[local_pixel] = uint8_t(0);
+        // We cannot exit until we have computed fwidth(), so this cannot be the first thing we do.
+        // A simple quad ballot would be nice ...
         return;
     }
 
@@ -191,5 +195,7 @@ void main()
 
     color_tiles[tile_instance_index].color[local_pixel] = u8vec4(urgba);
     depth_tiles[tile_instance_index].depth[local_pixel] = uint16_t(z);
+
+    // Can be expanded to use the full 8 bits for "MSAA".
     flag_tiles[tile_instance_index].flag[local_pixel] = uint8_t(1);
 }

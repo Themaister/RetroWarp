@@ -74,6 +74,7 @@ void main()
     int pixel_index_color = (x + y * fb_info.color_stride + fb_info.color_offset) & ((VRAM_SIZE >> 1) - 1);
     int pixel_index_depth = (x + y * fb_info.depth_stride + fb_info.depth_offset) & ((VRAM_SIZE >> 1) - 1);
 
+    // Read from VRAM.
     if (all(lessThan(coord, uvec2(fb_info.color_width, fb_info.color_height))))
         set_initial_rop_color(uint(vram_data[pixel_index_color]));
     if (all(lessThan(coord, uvec2(fb_info.depth_width, fb_info.depth_height))))
@@ -87,9 +88,11 @@ void main()
     int primitive_mask_count = fb_info.primitive_count_32;
     int primitive_coarse_mask_count = fb_info.primitive_count_1024;
 
+    // First, loop over coarsest bitmap ...
     for (int coarse_mask_index = 0; coarse_mask_index < primitive_coarse_mask_count; coarse_mask_index++)
     {
         uint coarse_binned = coarse_binning_bitmask[linear_tile_base_coarse + coarse_mask_index];
+        // Then finer bitmask.
         while (coarse_binned != 0u)
         {
             int mask_index = findLSB(coarse_binned);
@@ -100,6 +103,7 @@ void main()
 
             while (binned != 0u)
             {
+                // Now we have a primitive to rasterize.
                 int i = findLSB(binned);
                 binned &= ~uint(1 << i);
 
@@ -117,6 +121,7 @@ void main()
         }
     }
 
+    // Write-back to VRAM.
     if (all(lessThan(coord, uvec2(fb_info.color_width, fb_info.color_height))))
         if (get_rop_dirty_color())
             vram_data[pixel_index_color] = uint16_t(get_current_color());

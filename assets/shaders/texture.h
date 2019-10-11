@@ -8,6 +8,7 @@
 // Textures are referenced with "descriptors" which we parse by hand as well.
 // Fairly trivial implementation.
 
+// 5-bit sub-texel precision, modern GPUs have 8.
 uvec4 filter_horiz(uvec4 a, uvec4 b, int l)
 {
 	return a * (32u - uint(l)) + b * uint(l);
@@ -19,6 +20,7 @@ uvec4 filter_vert(uvec4 a, uvec4 b, int l)
 	return (ret + 512u) >> 10u;
 }
 
+// 3-tap bilinear filter would be nice here as well for that old-school look.
 uvec4 filter_bilinear(uvec4 sample0, uvec4 sample1, uvec4 sample2, uvec4 sample3, ivec2 l)
 {
 	uvec4 tex_top = filter_horiz(sample0, sample1, l.x);
@@ -27,12 +29,14 @@ uvec4 filter_bilinear(uvec4 sample0, uvec4 sample1, uvec4 sample2, uvec4 sample3
 	return tex;
 }
 
+// 8 mip-level bits.
 uvec4 filter_trilinear(uvec4 a, uvec4 b, int l)
 {
 	uvec4 res = a * uint(256 - l) + b * uint(l);
 	return (res + 0x80u) >> 8u;
 }
 
+// Can add way more formats here and palette support.
 const uint TEXTURE_FMT_ARGB1555 = 0;
 const uint TEXTURE_FMT_I8 = 1;
 const uint TEXTURE_FMT_LA88 = 4;
@@ -49,6 +53,7 @@ int round_down_bits(int u, int subsample)
 	return u >> subsample;
 }
 
+// Deal with pixels in blocks of 8x8. Crude form of address swizzling.
 int compute_offset(int x, int y, int blocks_x, int subsample)
 {
 	x = round_down_bits(x, subsample);
