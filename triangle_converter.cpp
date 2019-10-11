@@ -44,6 +44,7 @@ static void quantize_color(uint8_t output[4], const float input[4])
 	}
 }
 
+#if 0
 static int32_t quantize_z(float z)
 {
 	float rounded = std::round(z * float(((1 << 16) - 1) << 8));
@@ -71,6 +72,7 @@ static int32_t quantize_uv(float v)
 	assert(rounded <= float(std::numeric_limits<int32_t>::max()));
 	return int32_t(rounded);
 }
+#endif
 
 static int32_t round_away_from_zero_divide(int32_t x, int32_t y)
 {
@@ -87,7 +89,6 @@ static bool setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input, C
 {
 	setup = {};
 
-	// Assume no clipping is required for now.
 	const int16_t xs[] = { quantize_xy(input.vertices[0].x), quantize_xy(input.vertices[1].x), quantize_xy(input.vertices[2].x) };
 	const int16_t ys[] = { quantize_xy(input.vertices[0].y), quantize_xy(input.vertices[1].y), quantize_xy(input.vertices[2].y) };
 
@@ -128,6 +129,8 @@ static bool setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input, C
 	setup.pos.y_hi = y_hi;
 
 	// Compute slopes.
+	// Not sure if specific rounding away from zero is actually required,
+	// but I've seen it in a few implementations.
 	setup.pos.dxdy_a = round_away_from_zero_divide((x_c - x_a) << 16, std::max(1, y_hi - y_lo));
 	setup.pos.dxdy_b = round_away_from_zero_divide((x_b - x_a) << 16, std::max(1, y_mid - y_lo));
 	setup.pos.dxdy_c = round_away_from_zero_divide((x_c - x_b) << 16, std::max(1, y_hi - y_mid));
@@ -142,9 +145,11 @@ static bool setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input, C
 	int bc_y = ys[2] - ys[1];
 	int ca_x = xs[0] - xs[2];
 	int ca_y = ys[0] - ys[2];
+
+	// Standard cross product.
 	int signed_area = ab_x * bc_y - ab_y * bc_x;
 
-	// Check if triangle is degenerate.
+	// Check if triangle is degenerate or we can cull it based on winding.
 	if (signed_area == 0)
 		return false;
 	else if (cull_mode == CullMode::CCWOnly && signed_area > 0)
@@ -152,13 +157,15 @@ static bool setup_triangle(PrimitiveSetup &setup, const InputPrimitive &input, C
 	else if (cull_mode == CullMode::CWOnly && signed_area < 0)
 		return false;
 
-	// Recompute based on reordered vertices.
+	// Recompute based on reordered vertices, so we get correct interpolation equations.
 	ab_x = x_b - x_a;
 	bc_x = x_c - x_b;
 	ca_x = x_a - x_c;
 	ab_y = y_mid - y_lo;
 	bc_y = y_hi - y_mid;
 	ca_y = y_lo - y_hi;
+
+	// Standard cross product.
 	signed_area = ab_x * bc_y - ab_y * bc_x;
 
 	float inv_signed_area = 1.0f / float(signed_area);
@@ -221,6 +228,7 @@ static void interpolate_vertex(Vertex &v, const Vertex &a, const Vertex &b, floa
 	v.v = a.v * left + b.v * right;
 }
 
+// Create a bitmask for which vertices clip outside some boundary.
 static unsigned get_clip_code_low(const InputPrimitive &prim, float limit, unsigned comp)
 {
 	bool clip_a = prim.vertices[0].clip[comp] < limit;
@@ -230,6 +238,7 @@ static unsigned get_clip_code_low(const InputPrimitive &prim, float limit, unsig
 	return clip_code;
 }
 
+// Create a bitmask for which vertices clip outside some boundary.
 static unsigned get_clip_code_high(const InputPrimitive &prim, float limit, unsigned comp)
 {
 	bool clip_a = prim.vertices[0].clip[comp] > limit;
@@ -239,6 +248,8 @@ static unsigned get_clip_code_high(const InputPrimitive &prim, float limit, unsi
 	return clip_code;
 }
 
+// Interpolates two vertices towards one vertex which is inside the clip region.
+// No new vertices are generated.
 static void clip_single_output(InputPrimitive &output, const InputPrimitive &input, unsigned component, float target,
                                unsigned a, unsigned b, unsigned c)
 {
@@ -250,13 +261,17 @@ static void clip_single_output(InputPrimitive &output, const InputPrimitive &inp
 	interpolate_vertex(output.vertices[a], input.vertices[a], input.vertices[c], interpolate_a);
 	interpolate_vertex(output.vertices[b], input.vertices[b], input.vertices[c], interpolate_b);
 
+	// To avoid precision issues in interpolating, we expect the new vertex to be perfectly aligned with the clip plane.
 	output.vertices[a].clip[component] = target;
 	output.vertices[b].clip[component] = target;
+
 	output.vertices[c] = input.vertices[c];
 	output.u_offset = input.u_offset;
 	output.v_offset = input.v_offset;
 }
 
+// Interpolate one vertex against the clip plane.
+// This creates two primitives, not one.
 static void clip_dual_output(InputPrimitive *output, const InputPrimitive &input, unsigned component, float target,
                              unsigned a, unsigned b, unsigned c)
 {
@@ -269,6 +284,7 @@ static void clip_dual_output(InputPrimitive *output, const InputPrimitive &input
 	interpolate_vertex(ab, input.vertices[a], input.vertices[b], interpolate_ab);
 	interpolate_vertex(ac, input.vertices[a], input.vertices[c], interpolate_ac);
 
+	// To avoid precision issues in interpolating, we expect the new vertex to be perfectly aligned with the clip plane.
 	ab.clip[component] = target;
 	ac.clip[component] = target;
 
@@ -285,48 +301,49 @@ static void clip_dual_output(InputPrimitive *output, const InputPrimitive &input
 	output[1].v_offset = input.v_offset;
 }
 
+// Clipping a primitive results in 0, 1 or 2 primitives.
 static unsigned clip_component(InputPrimitive *prims, const InputPrimitive &prim, unsigned component,
                                float target, unsigned code)
 {
 	switch (code)
 	{
 	case 0:
-		// Nothing to clip.
+		// Nothing to clip. 1:1
 		prims[0] = prim;
 		return 1;
 
 	case 1:
-		// Clip A.
+		// Clip vertex A. 2 new primitives.
 		clip_dual_output(prims, prim, component, target, 0, 1, 2);
 		return 2;
 
 	case 2:
-		// Clip B.
+		// Clip vertex B. 2 new primitives.
 		clip_dual_output(prims, prim, component, target, 1, 2, 0);
 		return 2;
 
 	case 3:
-		// Interpolate A and B against C.
+		// Interpolate A and B against C. 1 primitive.
 		clip_single_output(prims[0], prim, component, target, 0, 1, 2);
 		return 1;
 
 	case 4:
-		// Clip C.
+		// Clip vertex C. 2 new primitives.
 		clip_dual_output(prims, prim, component, target, 2, 0, 1);
 		return 2;
 
 	case 5:
-		// Interpolate A and C against B.
+		// Interpolate A and C against B. 1 primitive.
 		clip_single_output(prims[0], prim, component, target, 2, 0, 1);
 		return 1;
 
 	case 6:
-		// Interpolate B and C against A.
+		// Interpolate B and C against A. 1 primitive.
 		clip_single_output(prims[0], prim, component, target, 1, 2, 0);
 		return 1;
 
 	case 7:
-		// All clipped.
+		// All clipped. Discard primitive.
 		return 0;
 
 	default:
@@ -357,6 +374,7 @@ static unsigned clip_triangles(InputPrimitive *outputs, const InputPrimitive *in
 static unsigned setup_clipped_triangles_clipped_w(PrimitiveSetup *setup, InputPrimitive &prim, CullMode mode, const ViewportTransform &vp)
 {
 	// Cull primitives on X/Y early.
+	// If all vertices are outside clip-space, we know the primitive is not visible.
 	if (prim.vertices[0].x < -prim.vertices[0].w &&
 	    prim.vertices[1].x < -prim.vertices[1].w &&
 	    prim.vertices[2].x < -prim.vertices[2].w)
@@ -382,9 +400,12 @@ static unsigned setup_clipped_triangles_clipped_w(PrimitiveSetup *setup, InputPr
 		return 0;
 	}
 
+	// FIXME: Not sure what the theoretical bound is, but it's probably way less than 256.
 	InputPrimitive tmp_a[256];
 	InputPrimitive tmp_b[256];
 
+#if 0
+	// Fixed point consideration.
 	const float ws[3] = {
 		prim.vertices[0].w,
 		prim.vertices[1].w,
@@ -394,9 +415,11 @@ static unsigned setup_clipped_triangles_clipped_w(PrimitiveSetup *setup, InputPr
 	float min_w = std::numeric_limits<float>::max();
 	for (auto w : ws)
 		min_w = std::min(min_w, w);
+#endif
 
 #if 1
 	// Try to center UV coordinates close to 0 for better division precision.
+	// This makes more sense for fixed point interpolation than FP interpolation though ...
 	float u_offset = floorf((1.0f / 3.0f) * (prim.vertices[0].u + prim.vertices[1].u + prim.vertices[2].u));
 	float v_offset = floorf((1.0f / 3.0f) * (prim.vertices[0].v + prim.vertices[1].v + prim.vertices[2].v));
 	prim.u_offset = int16_t(u_offset);
@@ -406,6 +429,9 @@ static unsigned setup_clipped_triangles_clipped_w(PrimitiveSetup *setup, InputPr
 	prim.v_offset = 0;
 #endif
 
+	// Perform perspective divide here, and replace W with 1/W.
+	// This allows us to perform perspective correct clipping without
+	// a lot of the worst complexity in implementation.
 	for (unsigned i = 0; i < 3; i++)
 	{
 		float iw = 1.0f / prim.vertices[i].w;
@@ -413,17 +439,25 @@ static unsigned setup_clipped_triangles_clipped_w(PrimitiveSetup *setup, InputPr
 		prim.vertices[i].y *= iw;
 		prim.vertices[i].z *= iw;
 
+#if 0
+		// Fixed point consideration.
 		// Rescale inverse W for improved interpolation accuracy.
 		// 1/w is now scaled to be maximum 1.
 		iw *= min_w;
+#endif
 		prim.vertices[i].u = (prim.vertices[i].u - u_offset) * iw;
 		prim.vertices[i].v = (prim.vertices[i].v - v_offset) * iw;
 		prim.vertices[i].w = iw;
+
+		// Color is intentionally not perspective correct.
 
 		// Apply viewport transform for X/Y.
 		prim.vertices[i].x = vp.x + (0.5f * prim.vertices[i].x + 0.5f) * vp.width;
 		prim.vertices[i].y = vp.y + (0.5f * prim.vertices[i].y + 0.5f) * vp.height;
 	}
+
+	// After the viewport transform we can clip X/Y on guard bard rather than the strict [-w, w] clipping scheme
+	// which we would normally have to do.
 
 	// Clip -X on guard bard.
 	unsigned count = clip_triangles(tmp_a, &prim, 1, 0, -2048.0f);
@@ -433,6 +467,8 @@ static unsigned setup_clipped_triangles_clipped_w(PrimitiveSetup *setup, InputPr
 	count = clip_triangles(tmp_a, tmp_b, count, 1, -2048.0f);
 	// Clip +Y on guard band.
 	count = clip_triangles(tmp_b, tmp_a, count, 1, +2047.0f);
+
+	// We could just support depth clamp, but it would make fixed point implementations very difficult ...
 	// Clip near, before viewport transform.
 	count = clip_triangles(tmp_a, tmp_b, count, 2, 0.0f);
 	// Clip far, before viewport transform.
@@ -444,10 +480,11 @@ static unsigned setup_clipped_triangles_clipped_w(PrimitiveSetup *setup, InputPr
 		auto &tmp_prim = tmp_b[i];
 		for (unsigned j = 0; j < 3; j++)
 		{
-			// Apply viewport transform for Z.
+			// Apply viewport transform for Z after clipping.
 			tmp_prim.vertices[j].z = vp.min_depth + tmp_prim.vertices[j].z * (vp.max_depth - vp.min_depth);
 		}
 
+		// Finally, we can perform triangle setup.
 		if (setup_triangle(setup[output_count], tmp_b[i], mode))
 			output_count++;
 	}
@@ -457,7 +494,8 @@ static unsigned setup_clipped_triangles_clipped_w(PrimitiveSetup *setup, InputPr
 
 unsigned setup_clipped_triangles(PrimitiveSetup *setup, const InputPrimitive &prim, CullMode mode, const ViewportTransform &vp)
 {
-	// Don't clip against 0, since we have no way to deal with infinities in the rasterizer.
+	// First, we need to clip if we have negative W coordinates.
+	// Don't clip against 0, since we have no way to deal with infinities in the rasterizer later.
 	// W of 1.0 / 1024.0 is super close to eye anyways.
 	static const float MIN_W = 1.0f / 1024.0f;
 

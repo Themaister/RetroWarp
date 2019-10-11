@@ -38,10 +38,12 @@ static uint16_t clamp_unorm16(int z)
 		return uint16_t(z);
 }
 
+#if 0
 static int wrap_uv(int32_t coord)
 {
 	return int32_t(uint32_t(coord) << 11) >> 11;
 }
+#endif
 
 void RasterizerCPU::render_primitive(const PrimitiveSetup &prim)
 {
