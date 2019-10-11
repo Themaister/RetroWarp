@@ -57,6 +57,10 @@ At the end, performance metrics are reported in time / iteration (i.e. frame).
 
 Resolution is specified in the dump as it contains post-triangle setup data and cannot be rescaled.
 
+### Dataset
+
+There is a sample dataset for benchmarking in `dataset/`.
+
 ## Implementation
 
 ### Triangle processing
