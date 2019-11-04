@@ -676,10 +676,7 @@ void RasterizerGPU::Impl::run_rop_ubershader(CommandBuffer &cmd)
 	                                        VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
 	                                        VK_SUBGROUP_FEATURE_BALLOT_BIT;
 
-	// Some weird compiler bugs show up from time to time ...
-	bool broken_fwidth = device->get_gpu_properties().vendorID == VENDOR_ID_NVIDIA;
-
-	if (!broken_fwidth && subgroup && features.compute_shader_derivative_features.computeDerivativeGroupQuads)
+	if (subgroup && features.compute_shader_derivative_features.computeDerivativeGroupQuads)
 	{
 		cmd.set_program("assets://shaders/rop_ubershader.comp", {
 			{"DERIVATIVE_GROUP_QUAD", 1},
@@ -688,7 +685,7 @@ void RasterizerGPU::Impl::run_rop_ubershader(CommandBuffer &cmd)
 			{"TILE_SIZE_SQUARE", tile_size * tile_size},
 		});
 	}
-	else if (!broken_fwidth && subgroup && features.compute_shader_derivative_features.computeDerivativeGroupLinear)
+	else if (subgroup && features.compute_shader_derivative_features.computeDerivativeGroupLinear)
 	{
 		cmd.set_program("assets://shaders/rop_ubershader.comp", {
 				{"DERIVATIVE_GROUP_LINEAR", 1},
