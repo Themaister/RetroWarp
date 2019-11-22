@@ -430,6 +430,17 @@ void RasterizerGPU::Impl::binning_low_res_prepass(CommandBuffer &cmd)
 	auto &features = device->get_device_features();
 	uint32_t subgroup_size = features.subgroup_properties.subgroupSize;
 
+#if 0
+	if (features.subgroup_size_control_features.subgroupSizeControl &&
+	    (features.subgroup_size_control_properties.requiredSubgroupSizeStages & VK_SHADER_STAGE_COMPUTE_BIT) &&
+	    features.subgroup_size_control_properties.minSubgroupSize <= 32 &&
+	    features.subgroup_size_control_properties.maxSubgroupSize >= 32)
+	{
+		// Prefer subgroup size of 32 if possible.
+		subgroup_size = 32;
+	}
+#endif
+
 	const VkSubgroupFeatureFlags required = VK_SUBGROUP_FEATURE_BALLOT_BIT | VK_SUBGROUP_FEATURE_BASIC_BIT;
 	if (subgroup && (features.subgroup_properties.supportedOperations & required) == required &&
 	    (features.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
@@ -484,6 +495,17 @@ void RasterizerGPU::Impl::binning_full_res(CommandBuffer &cmd, bool ubershader)
 
 	auto &features = device->get_device_features();
 	uint32_t subgroup_size = features.subgroup_properties.subgroupSize;
+
+#if 0
+	if (features.subgroup_size_control_features.subgroupSizeControl &&
+	    (features.subgroup_size_control_properties.requiredSubgroupSizeStages & VK_SHADER_STAGE_COMPUTE_BIT) &&
+	    features.subgroup_size_control_properties.minSubgroupSize <= 32 &&
+	    features.subgroup_size_control_properties.maxSubgroupSize >= 32)
+	{
+		// Prefer subgroup size of 32 if possible.
+		subgroup_size = 32;
+	}
+#endif
 
 	uint32_t num_masks = (staging.count + 31) / 32;
 
