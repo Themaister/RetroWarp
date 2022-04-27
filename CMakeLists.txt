@@ -36,14 +36,14 @@ target_include_directories(rasterizer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(rasterizer-gpu STATIC
         rasterizer_gpu.cpp rasterizer_gpu.hpp)
-target_link_libraries(rasterizer-gpu PRIVATE granite PUBLIC rasterizer)
+target_link_libraries(rasterizer-gpu PRIVATE granite-vulkan granite-stb PUBLIC rasterizer granite-math)
 
 add_granite_application(viewer viewer.cpp)
 target_compile_options(viewer PRIVATE ${RETROWARP_CXX_FLAGS})
-target_link_libraries(viewer PRIVATE rasterizer-gpu stb)
+target_link_libraries(viewer PRIVATE rasterizer-gpu granite-stb granite-scene-export)
 target_compile_definitions(viewer PRIVATE ASSET_DIRECTORY=\"${CMAKE_CURRENT_SOURCE_DIR}/assets\")
 
 add_granite_offline_tool(dump-bench dump_bench.cpp)
 target_compile_options(dump-bench PRIVATE ${RETROWARP_CXX_FLAGS})
-target_link_libraries(dump-bench PRIVATE rasterizer-gpu)
+target_link_libraries(dump-bench PRIVATE rasterizer-gpu granite-stb granite-scene-export)
 target_compile_definitions(dump-bench PRIVATE ASSET_DIRECTORY=\"${CMAKE_CURRENT_SOURCE_DIR}/assets\")

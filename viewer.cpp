@@ -10,7 +10,6 @@
 
 #include "global_managers.hpp"
 #include "math.hpp"
-#include "texture_files.hpp"
 #include "gltf.hpp"
 #include "camera.hpp"
 #include "rasterizer_gpu.hpp"
@@ -20,6 +19,7 @@
 #include "application.hpp"
 #include "cli_parser.hpp"
 #include "texture_utils.hpp"
+#include "texture_files.hpp"
 
 using namespace RetroWarp;
 using namespace Granite;
@@ -32,7 +32,7 @@ struct SoftwareRenderableComponent : ComponentBase
 	std::vector<Vertex> vertices;
 	std::vector<Vertex> transformed_vertices;
 	std::vector<uvec3> indices;
-	SceneFormats::MemoryMappedTexture color_texture;
+	Vulkan::MemoryMappedTexture color_texture;
 	unsigned state_index;
 };
 
@@ -54,7 +54,7 @@ struct SWRenderApplication : Application, EventHandler
 	FILE *dump_file = nullptr;
 	void begin_dump_frame();
 	void end_dump_frame();
-	void dump_textures(const std::vector<SceneFormats::MemoryMappedTexture *> &textures);
+	void dump_textures(const std::vector<Vulkan::MemoryMappedTexture *> &textures);
 	void dump_set_texture(unsigned index);
 	void dump_primitives(const PrimitiveSetup *setup, unsigned count);
 	void dump_alpha_threshold(uint8_t threshold);
@@ -136,7 +136,7 @@ void SWRenderApplication::create_software_renderable(Entity *entity, RenderableC
 	}
 
 	auto &mat = imported_mesh->get_material_info();
-	sw->color_texture = load_texture_from_file(mat.base_color.path);
+	sw->color_texture = Vulkan::load_texture_from_file(*GRANITE_FILESYSTEM(), mat.base_color.path);
 
 	auto itr = state_index_map.find(mat.base_color.path);
 	if (itr == end(state_index_map))
@@ -273,14 +273,14 @@ void SWRenderApplication::begin_dump_frame()
 	fwrite(&word, 1, sizeof(word), dump_file);
 }
 
-void SWRenderApplication::dump_textures(const std::vector<SceneFormats::MemoryMappedTexture *> &textures)
+void SWRenderApplication::dump_textures(const std::vector<Vulkan::MemoryMappedTexture *> &textures)
 {
 	if (!dump_file)
 		return;
 	uint32_t word = textures.size();
 	fwrite(&word, 1, sizeof(word), dump_file);
 	for (unsigned i = 0; i < textures.size(); i++)
-		textures[i]->copy_to_path(std::string("retrowarp.dump.tex.") + std::to_string(i));
+		textures[i]->copy_to_path(*GRANITE_FILESYSTEM(), std::string("retrowarp.dump.tex.") + std::to_string(i));
 }
 
 void SWRenderApplication::dump_set_texture(unsigned index)
@@ -356,7 +356,7 @@ bool SWRenderApplication::on_key_pressed(const KeyboardEvent &e)
 	else if (e.get_key_state() == KeyState::Pressed && e.get_key() == Key::U)
 		update_setup_cache = !update_setup_cache;
 	else if (e.get_key_state() == KeyState::Pressed && e.get_key() == Key::Space)
-		get_wsi().set_present_mode(get_wsi().get_present_mode() == Vulkan::PresentMode::SyncToVBlank ? Vulkan::PresentMode::Unlocked : Vulkan::PresentMode::SyncToVBlank);
+		get_wsi().set_present_mode(get_wsi().get_present_mode() == Vulkan::PresentMode::SyncToVBlank ? Vulkan::PresentMode::UnlockedMaybeTear : Vulkan::PresentMode::SyncToVBlank);
 	return true;
 }
 
@@ -379,7 +379,7 @@ void SWRenderApplication::render_frame(double frame_time, double)
 {
 	auto &device = get_wsi().get_device();
 	auto &scene = loader.get_scene();
-	scene.update_cached_transforms();
+	scene.update_all_transforms();
 
 	rasterizer_gpu.clear_color();
 	rasterizer_gpu.clear_depth();
@@ -389,7 +389,7 @@ void SWRenderApplication::render_frame(double frame_time, double)
 	InputPrimitive input = {};
 	PrimitiveSetup setups[256];
 
-	auto &renderables = scene.get_entity_pool().get_component_group<RenderableComponent, SoftwareRenderableComponent, RenderInfoComponent>();
+	auto renderables = scene.get_entity_pool().get_component_group<RenderableComponent, SoftwareRenderableComponent, RenderInfoComponent>();
 
 	sort(begin(renderables), end(renderables), [&](const auto &a, const auto &b) {
 		return get_component<SoftwareRenderableComponent>(a)->state_index < get_component<SoftwareRenderableComponent>(b)->state_index;
@@ -401,7 +401,7 @@ void SWRenderApplication::render_frame(double frame_time, double)
 		unsigned max_state_index = 0;
 		for (auto &renderable : renderables)
 			max_state_index = std::max(max_state_index, get_component<SoftwareRenderableComponent>(renderable)->state_index);
-		std::vector<SceneFormats::MemoryMappedTexture *> source_paths(max_state_index + 1);
+		std::vector<Vulkan::MemoryMappedTexture *> source_paths(max_state_index + 1);
 		for (auto &renderable : renderables)
 		{
 			auto *sw = get_component<SoftwareRenderableComponent>(renderable);
@@ -554,7 +554,7 @@ Application *application_create(int argc, char **argv)
 		return nullptr;
 	}
 
-	Global::filesystem()->register_protocol("assets", std::make_unique<OSFilesystem>(ASSET_DIRECTORY));
+	GRANITE_FILESYSTEM()->register_protocol("assets", std::make_unique<OSFilesystem>(ASSET_DIRECTORY));
 	return new SWRenderApplication(path, subgroup, ubershader, async_compute, width, height, tile_size);
 }
 }

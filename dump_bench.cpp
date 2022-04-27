@@ -8,7 +8,7 @@
 #include <random>
 #include <assert.h>
 
-#include "global_managers.hpp"
+#include "global_managers_init.hpp"
 #include "math.hpp"
 #include "texture_files.hpp"
 #include "gltf.hpp"
@@ -21,6 +21,7 @@
 #include "application.hpp"
 #include "cli_parser.hpp"
 #include "texture_utils.hpp"
+#include "texture_files.hpp"
 
 constexpr int TEXTURE_BASE_LEVEL = 1;
 
@@ -191,9 +192,9 @@ int main(int argc, char **argv)
 	}
 
 	Global::init();
-	Global::filesystem()->register_protocol("assets", std::make_unique<OSFilesystem>(ASSET_DIRECTORY));
+	GRANITE_FILESYSTEM()->register_protocol("assets", std::make_unique<OSFilesystem>(ASSET_DIRECTORY));
 
-	auto dump_file = Global::filesystem()->open(path, FileMode::ReadOnly);
+	auto dump_file = GRANITE_FILESYSTEM()->open(path, FileMode::ReadOnly);
 	if (!dump_file)
 	{
 		LOGE("Failed to open %s\n", path.c_str());
@@ -257,7 +258,7 @@ int main(int argc, char **argv)
 	for (unsigned i = 0; i < num_textures; i++)
 	{
 		auto tex_path = std::string(argv[1]) + ".tex." + std::to_string(i);
-		auto tex_file = load_texture_from_file(tex_path, ColorSpace::Linear);
+		auto tex_file = load_texture_from_file(*GRANITE_FILESYSTEM(), tex_path, Vulkan::ColorSpace::Linear);
 		if (tex_file.empty())
 		{
 			LOGE("Failed to load texture.\n");

@@ -788,7 +788,7 @@ void RasterizerGPU::Impl::flush_ubershader()
 	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
 
 	auto t1 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-	device->register_time_interval(t0, t1, "binning-low-res-prepass");
+	device->register_time_interval("GPU", t0, t1, "binning-low-res-prepass");
 	device->submit(cmd);
 
 	auto &rop_sem = tile_instance_data.rop_complete[tile_instance_data.index];
@@ -806,7 +806,7 @@ void RasterizerGPU::Impl::flush_ubershader()
 	binning_full_res(*cmd, true);
 
 	auto t2 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-	device->register_time_interval(t1, t2, "binning-full-res");
+	device->register_time_interval("GPU", t1, t2, "binning-full-res");
 
 	Semaphore sem;
 	device->submit(cmd, nullptr, 1, &sem);
@@ -825,14 +825,14 @@ void RasterizerGPU::Impl::flush_ubershader()
 	run_rop_ubershader(*cmd);
 
 	auto t3 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-	device->register_time_interval(t2, t3, "rop-ubershader");
+	device->register_time_interval("GPU", t2, t3, "rop-ubershader");
 
 	sem.reset();
 	device->submit(cmd, nullptr, 1, &sem);
 	tile_instance_data.rop_complete[tile_instance_data.index] = sem;
 	reset_staging();
 
-	device->register_time_interval(t0, t3, "iteration");
+	device->register_time_interval("GPU", t0, t3, "iteration");
 	tile_instance_data.index ^= 1;
 }
 
@@ -861,7 +861,7 @@ void RasterizerGPU::Impl::flush_split()
 	             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
 
 	auto t1 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-	device->register_time_interval(t0, t1, "binning-low-res-prepass");
+	device->register_time_interval("GPU", t0, t1, "binning-low-res-prepass");
 	device->submit(cmd);
 
 	// Need to wait until an earlier pass of ROP completes.
@@ -887,12 +887,12 @@ void RasterizerGPU::Impl::flush_split()
 	             VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT);
 
 	auto t2 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-	device->register_time_interval(t1, t2, "binning-full-res");
+	device->register_time_interval("GPU", t1, t2, "binning-full-res");
 
 	dispatch_combiner_work(*cmd);
 
 	auto t3 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-	device->register_time_interval(t2, t3, "dispatch-combiner-work");
+	device->register_time_interval("GPU", t2, t3, "dispatch-combiner-work");
 
 	// Hand off shaded result to ROP.
 	Semaphore sem;
@@ -912,9 +912,9 @@ void RasterizerGPU::Impl::flush_split()
 	run_rop(*cmd);
 
 	auto t4 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-	device->register_time_interval(t3, t4, "rop");
+	device->register_time_interval("GPU", t3, t4, "rop");
 
-	device->register_time_interval(t0, t4, "iteration");
+	device->register_time_interval("GPU", t0, t4, "iteration");
 
 	sem.reset();
 	device->submit(cmd, nullptr, 1, &sem);
@@ -1126,7 +1126,7 @@ void RasterizerGPU::clear_depth(uint16_t z)
 	cmd->dispatch((registers.width + 15) / 16, (registers.height + 15) / 16, 1);
 
 	auto t1 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-	impl->device->register_time_interval(t0, t1, "clear-depth");
+	impl->device->register_time_interval("GPU", t0, t1, "clear-depth");
 	impl->device->submit(cmd);
 }
 
@@ -1218,7 +1218,7 @@ void RasterizerGPU::clear_color(uint32_t rgba)
 	cmd->dispatch((registers.width + 15) / 16, (registers.height + 15) / 16, 1);
 
 	auto t1 = cmd->write_timestamp(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-	impl->device->register_time_interval(t0, t1, "clear-color");
+	impl->device->register_time_interval("GPU", t0, t1, "clear-color");
 	impl->device->submit(cmd);
 }
 
